@@ -1,0 +1,71 @@
+name: aurwin
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aurwin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: aurwin
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Порт наружу НЕ публикуется (CLAUDE.md / ТЗ А.7): Postgres доступен только
+    # другим сервисам этого docker-compose по имени "postgres" во внутренней сети.
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aurwin -d aurwin"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Заготовки сервисов (ТЗ А.1) — фаза 1 «Каркас». Реальная логика тика,
+  # очереди рефлексий и API появится в следующих фазах.
+  sim-engine:
+    build:
+      context: .
+      dockerfile: services/sim-engine/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  reflection-worker:
+    build:
+      context: .
+      dockerfile: services/reflection-worker/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api-gateway
+
+volumes:
+  pgdata:

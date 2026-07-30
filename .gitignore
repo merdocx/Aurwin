@@ -1,0 +1,31 @@
+# Секреты — никогда не коммитить (CLAUDE.md, «Незыблемые правила», п.1)
+.env
+.env.*
+!.env.example
+
+# Зависимости
+node_modules/
+
+# Сборка
+dist/
+build/
+apps/frontend/dist/
+
+# Тесты/покрытие
+coverage/
+
+# Логи
+*.log
+npm-debug.log*
+
+# Логи оркестратора фаз (ops/build.sh)
+ops/logs/
+
+# Данные Postgres при локальном докере
+.pgdata/
+
+# ОС/редакторы
+.DS_Store
+*.swp
+.vscode/
+.idea/

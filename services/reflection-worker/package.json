@@ -1,0 +1,16 @@
+{
+  "name": "@aurwin/reflection-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Очередь LLM-рефлексий: дебаунс, слияние событий, batch-отправка, ретраи (ТЗ А.1, 7.3)",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js"
+  },
+  "devDependencies": {
+    "tsx": "^4.16.5",
+    "typescript": "^5.5.4"
+  }
+}

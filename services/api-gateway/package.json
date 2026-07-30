@@ -1,0 +1,16 @@
+{
+  "name": "@aurwin/api-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WebSocket-поток состояния + REST для карточек/соцкарты, только чтение (ТЗ А.1, 7.1)",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js"
+  },
+  "devDependencies": {
+    "tsx": "^4.16.5",
+    "typescript": "^5.5.4"
+  }
+}
