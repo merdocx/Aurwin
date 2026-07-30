@@ -27,7 +27,8 @@ function get(obj: unknown, dottedPath: string): unknown {
     );
 }
 
-// Один путь на каждую строку таблицы А.9 (52 константы).
+// Один путь на каждую строку таблицы А.9, плюс несколько добавленных в фазах
+// 2-3 констант вне табл. А.9 дословно (обоснование — ops/DEVIATIONS.md).
 const EXPECTED_PATHS = [
   "time.visual_tick_seconds",
   "time.biological_clock_speedup",
@@ -63,6 +64,16 @@ const EXPECTED_PATHS = [
   "world.fish_respawn_per_tick.north_bay",
   "world.fish_respawn_per_tick.south_shallows",
   "world.base_hunt_success_probability",
+  "world.zones.far_ice.type",
+  "world.zones.far_ice.share",
+  "world.zones.main_ice.type",
+  "world.zones.main_ice.share",
+  "world.zones.north_bay.type",
+  "world.zones.north_bay.share",
+  "world.zones.south_shallows.type",
+  "world.zones.south_shallows.share",
+  "world.zones.open_water.type",
+  "world.zones.open_water.share",
   "social.friendship.threshold",
   "social.friendship.decay_below",
   "life_stages.penguin_weeks.juvenile",
@@ -74,6 +85,8 @@ const EXPECTED_PATHS = [
   "life_stages.juvenile_self_feeding_efficiency",
   "movement.water_speed.penguin",
   "movement.water_speed.orca",
+  "movement.ice_speed.penguin",
+  "movement.old_age_speed_multiplier",
   "movement.stealth_approach.speed_multiplier",
   "movement.stealth_approach.perceived_threat_multiplier",
   "decision_log.sampled_creatures_count",

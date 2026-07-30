@@ -9,6 +9,10 @@ COPY services/sim-engine/package.json ./services/sim-engine/package.json
 RUN npm install --workspace=@aurwin/sim-engine --include-workspace-root
 
 COPY services/sim-engine ./services/sim-engine
+# config/constants.yaml — единый источник правды для констант симуляции
+# (CLAUDE.md, п.3); world/constants.ts читает его по относительному пути
+# от services/sim-engine, поэтому файл должен быть в образе.
+COPY config ./config
 
 WORKDIR /app/services/sim-engine
 CMD ["npm", "run", "dev"]
