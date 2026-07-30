@@ -1,0 +1,23 @@
+{
+  "name": "@aurwin/db",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Схема PostgreSQL (ТЗ А.2), миграции и скрипты обслуживания (политика ретенции)",
+  "type": "module",
+  "scripts": {
+    "migrate:up": "tsx scripts/migrate-cli.ts up",
+    "migrate:down": "tsx scripts/migrate-cli.ts down",
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0",
+    "pg": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/pg": "^8.11.10",
+    "node-pg-migrate": "^9.0.0",
+    "tsx": "^4.16.5",
+    "typescript": "^5.5.4"
+  }
+}

@@ -52,7 +52,7 @@ services:
     env_file:
       - .env
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -63,7 +63,7 @@ services:
       dockerfile: apps/frontend/Dockerfile
     restart: unless-stopped
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
     depends_on:
       - api-gateway
 

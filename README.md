@@ -5,8 +5,8 @@
 развивается через периодическую LLM-рефлексию (Claude). Полное техническое
 задание: [`docs/AURWIN_TZ.md`](docs/AURWIN_TZ.md).
 
-Текущая фаза: **1 — «Каркас»** (структура репозитория, конфиг констант,
-docker-compose, заготовки сервисов; тик-логики и рефлексии ещё нет).
+Текущая фаза: **2 — «Данные»** (схема PostgreSQL из А.2, миграции, скрипты
+ретенции; тик-логика и рефлексия — предмет следующих фаз).
 
 ## Состав монорепозитория
 
@@ -17,6 +17,7 @@ npm workspaces, единый корневой `package.json`:
 | `services/sim-engine` | sim-engine | Тик-цикл 24/7: utility AI, биочасы, события, запись состояния |
 | `services/reflection-worker` | reflection-worker | Очередь LLM-рефлексий: дебаунс, слияние, batch, ретраи |
 | `services/api-gateway` | api-gateway | WebSocket-поток + REST для карточек, только чтение |
+| `services/db` | @aurwin/db | Схема Postgres (А.2), миграции (node-pg-migrate), скрипты ретенции |
 | `apps/frontend` | frontend | React + PixiJS, read-only рендер мира |
 | `config/constants.yaml` | — | Единый источник правды для всех констант симуляции (табл. А.9) |
 
@@ -42,8 +43,33 @@ cp .env.example .env   # заполнить ANTHROPIC_API_KEY / POSTGRES_PASSWOR
 npm test
 ```
 
-Фаза 1: один smoke-тест — читает `config/constants.yaml` и проверяет, что
-присутствуют все константы из таблицы А.9 ТЗ.
+Фаза 1: smoke-тест `config/constants.yaml` (все константы табл. А.9 + блок
+ретенции А.2). Фаза 2: тесты `services/db` — схема БД, инвариант `bonds`
+(`creature_a < creature_b`), полный откат/повтор миграций, скрипты
+обслуживания ретенции. Эти тесты сами поднимают одноразовый контейнер
+`postgres:16-alpine` через Docker (см. `tests/setup/global-db-setup.ts`) —
+для `npm test` нужен доступный `docker`, но НЕ обязательно поднятый
+`docker compose` стек.
+
+## Схема БД и миграции (services/db)
+
+```bash
+# Применить миграции (нужен DATABASE_URL, см. .env.example)
+DATABASE_URL=postgres://aurwin:<пароль>@localhost:5432/aurwin \
+  npm run migrate:up --workspace=@aurwin/db
+
+# Откатить все миграции
+DATABASE_URL=... npm run migrate:down --workspace=@aurwin/db
+```
+
+Все 12 таблиц из ТЗ А.2 (`creatures`, `episodes`, `bonds`, `aversions`,
+`trait_history`, `perceived_states`, `perceived_zone_threat`, `signal_trust`,
+`signals`, `reflections`, `world_events`, `decision_log`) + вспомогательные
+агрегаты для ретенции (`world_events_daily_agg`, `signals_daily_agg`).
+Скрипты обслуживания политики ретенции — `services/db/src/maintenance/`
+(прунинг эпизодов, TTL `decision_log`, обнуление `reflections.request/response`,
+прореживание `trait_history`, сворачивание `world_events`/`signals` в
+агрегаты, удаление транзиентных записей при смерти существа).
 
 ## Запуск через Docker Compose
 

@@ -118,6 +118,12 @@ const EXPECTED_PATHS = [
   "authority.transmission_weight.base",
   "authority.transmission_weight.authority_weight",
   "authority.recompute_interval",
+  // Ретенция данных (А.2, абзац "ПОЛИТИКА РЕТЕНЦИИ") — вне табл. А.9, добавлено
+  // в фазе 2 для соблюдения CLAUDE.md п.3 (единый источник правды для констант).
+  "retention.episodes_days_after_death",
+  "retention.world_events_full_days",
+  "retention.reflections_audit_days",
+  "retention.signals_full_days",
 ];
 
 describe("config/constants.yaml", () => {
