@@ -10,7 +10,8 @@
   ],
   "scripts": {
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "simulate": "npm run simulate --workspace @aurwin/sim-engine --"
   },
   "devDependencies": {
     "js-yaml": "^4.1.0",

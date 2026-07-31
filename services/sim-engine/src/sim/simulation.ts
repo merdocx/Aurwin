@@ -28,7 +28,7 @@ import { distance } from "./huntingAttractiveness.js";
 import { recordEpisode, decayEpisodeSignificance, propagateSocialLearning, transmitOnBondFormed } from "./memory.js";
 import { applyTraitDeltas, applyWeightDeltas, generateMockReflection, shouldTriggerBackgroundReflection, type ReflectionResult } from "./reflection.js";
 import { applyTrustUpdate, resolveAlarmCallsOnExpiry, resolveDisplayVigorAgainstHunt, wakeSleepersOnAlarm } from "./signalResolution.js";
-import { ticksToRealSeconds, realDaysToTicks, realHoursToTicks } from "./time.js";
+import { ticksToRealSeconds, realHoursToTicks } from "./time.js";
 import {
   isAlive,
   type AversionRecord,
@@ -194,6 +194,7 @@ export class Simulation {
     for (const creature of alive) {
       const decision = this.decideFor(creature, visibleByCreature.get(creature.id) ?? [], phase, isNight);
       decisions.set(creature.id, decision);
+      creature.actionCounts[decision.action] = (creature.actionCounts[decision.action] ?? 0) + 1;
       if (this.shouldLogDecision(creature.id)) {
         this.decisionLog.push({ creatureId: creature.id, tick: this.tick_, chosenAction: decision.action, factors: decision.factors });
         if (this.decisionLog.length > this.decisionLogCap) this.decisionLog.shift();
@@ -227,8 +228,11 @@ export class Simulation {
       if (isAlive(creature)) decaySkills(creature, dtRealSeconds);
     }
 
-    // 11. updateAuthority() — раз во внутренние сутки.
-    const ticksPerInnerDay = Math.round(realDaysToTicks(1));
+    // 11. updateAuthority() — раз во внутренние сутки (~3.4 реальных часа,
+    // time.inner_day_real_hours — НЕ realDaysToTicks(1), это был бы один
+    // полный реальный день, в 7 раз реже требуемого; day_night.ticksPerDay()
+    // уже считает именно внутренние сутки, см. world/dayNight.ts).
+    const ticksPerInnerDay = this.world.dayNight.ticksPerDay();
     if (this.tick_ % ticksPerInnerDay === 0) {
       for (const creature of alive) {
         if (isAlive(creature)) creature.authority = computeAuthority(creature, ageWeeksAt(creature.bornAtTick, this.tick_));
@@ -250,6 +254,7 @@ export class Simulation {
       if (isAlive(creature)) decayEpisodeSignificance(creature, dtRealSeconds);
     }
     this.pruneRecentPredation();
+    this.pruneHuntCooldowns();
 
     // 13. broadcastDelta() — хук без реализации в фазе 4 (наблюдение — фаза 5).
     // 14. persistSnapshot() — хук без реализации в фазе 4 (БД — вне рамок; см. ops/DEVIATIONS.md).
@@ -305,6 +310,21 @@ export class Simulation {
   private guardedOffspringThisTick = new Set<string>();
   private visibilityBoostThisTick = new Map<string, number>();
   private coordinatedPreyThisTick = new Map<string, Set<string>>();
+  /**
+   * (orcaId|preyId) -> тик последней попытки охоты этой касатки на эту
+   * конкретную жертву. Касатка в воде БЫСТРЕЕ пингвина (22 vs 14 у.е./тик,
+   * А.10) — попав в радиус контакта, жертва физическим бегством оторваться
+   * не может, поэтому без кулдауна одна и та же пара резолвилась бы на
+   * КАЖДОМ тике подряд, пока преследование не закончится успехом (P->1 по
+   * мере накопления бросков, что противоречит "результативна, но не
+   * тотальна" из А.10 — это и обнажили первые тестовые прогоны, где
+   * genesis-популяция пингвинов вымирала за 1-3 внутренних суток). Кулдаун
+   * даёт промаху реальный смысл — жертва получает окно, чтобы физически
+   * уйти на дистанцию/спрятаться, прежде чем ТА ЖЕ касатка попробует снова
+   * (см. ops/DEVIATIONS.md и ops/BALANCE_LOG.md, фаза 4). Другую видимую
+   * жертву касатка может атаковать в тот же тик без ограничения.
+   */
+  private lastHuntAttemptTick = new Map<string, number>();
 
   private visibilityMultiplierFor(creatureId: string): number {
     return this.visibilityBoostThisTick.get(creatureId) ?? 1;
@@ -440,7 +460,24 @@ export class Simulation {
           break;
         }
         case "hunt": {
-          if (target && isAlive(target)) this.resolveHuntAttempt(creature, target, tickSkillGrowth, tickOutcomes);
+          // "Базовая вероятность успеха ... при контакте" (А.10) — контакт
+          // операционализирован как физическая близость (contact_radius_units,
+          // см. ops/DEVIATIONS.md), а не сам факт выбора действия "hunt".
+          // Без этой проверки касатка "атакует" на КАЖДОМ тике, пока жертва
+          // всего лишь видна (радиус восприятия 200 у.е.), т.е. успевает
+          // сделать десятки независимых бросков вероятности за одно
+          // преследование ещё до физического сближения — это и обнажил
+          // первый же тестовый прогон (популяция пингвинов рухнула за 1
+          // внутренние сутки).
+          if (target && isAlive(target) && distance(creature.pos, target.pos) <= getSimConstants().hunting.contact_radius_units) {
+            const pairKey = `${creature.id}|${target.id}`;
+            const last = this.lastHuntAttemptTick.get(pairKey);
+            const cooldownTicks = Math.round(realHoursToTicks(getSimConstants().hunting.reattempt_cooldown_real_minutes / 60));
+            if (last === undefined || this.tick_ - last >= cooldownTicks) {
+              this.lastHuntAttemptTick.set(pairKey, this.tick_);
+              this.resolveHuntAttempt(creature, target, tickSkillGrowth, tickOutcomes);
+            }
+          }
           break;
         }
         default:
@@ -678,5 +715,13 @@ export class Simulation {
   private pruneRecentPredation(): void {
     const cutoff = this.tick_ - Math.round(realHoursToTicks(2));
     this.recentPredation = this.recentPredation.filter((p) => p.tick >= cutoff);
+  }
+
+  /** Иначе lastHuntAttemptTick растёт неограниченно за многосуточный прогон (пары давно умерших особей). */
+  private pruneHuntCooldowns(): void {
+    const cutoff = this.tick_ - Math.round(realHoursToTicks((2 * getSimConstants().hunting.reattempt_cooldown_real_minutes) / 60));
+    for (const [key, tick] of this.lastHuntAttemptTick) {
+      if (tick < cutoff) this.lastHuntAttemptTick.delete(key);
+    }
   }
 }

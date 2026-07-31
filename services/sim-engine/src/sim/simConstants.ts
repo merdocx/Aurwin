@@ -145,6 +145,8 @@ export interface SimConstants {
     hunger_reduction_per_meal: number;
   };
   hunting: {
+    contact_radius_units: number;
+    reattempt_cooldown_real_minutes: number;
     juvenile_prey_multiplier: number;
     old_prey_multiplier: number;
     noticed_in_advance_multiplier: number;
