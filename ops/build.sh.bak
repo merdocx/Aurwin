@@ -8,17 +8,12 @@ mkdir -p ops/reports ops/logs
 START="${1:-1}"
 
 for phase in $(seq "$START" 7); do
-  case $phase in
-    4) TURNS=500 ;;
-    6) TURNS=250 ;;
-    *) TURNS=150 ;;
-  esac
-  echo "=== Фаза $phase — старт $(date '+%F %T'), лимит ходов $TURNS ==="
+  echo "=== Фаза $phase — старт $(date '+%F %T') ==="
 
   claude -p "$(cat ops/phases/phase-${phase}.md)" \
     --allowedTools "Read,Edit,Write,Bash,Grep,Glob" \
     --permission-mode acceptEdits \
-    --max-turns "$TURNS" \
+    --max-turns 150 \
     --output-format json \
     > "ops/logs/phase-${phase}.json" \
     2> "ops/logs/phase-${phase}.err" || {

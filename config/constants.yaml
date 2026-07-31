@@ -185,8 +185,8 @@ world:
   zones:
     far_ice: { type: ice, share: 0.05 }
     main_ice: { type: ice, share: 0.30 }
-    north_bay: { type: water, share: 0.20 }
     south_shallows: { type: water, share: 0.20 }
+    north_bay: { type: water, share: 0.20 }
     open_water: { type: water, share: 0.25 }
 
 social:
