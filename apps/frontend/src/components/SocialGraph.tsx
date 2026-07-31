@@ -6,7 +6,7 @@ interface Props {
   onSelectCreature: (id: string) => void;
 }
 
-/** Раскладка узлов по кругу — простая и детерминированная, без силовой симуляции (не требуется ТЗ, только читаемость графа дружб). */
+/** Раскладка узлов по кругу — простая и детерминированная, без силовой симуляции. */
 function circularLayout(ids: string[], radius: number): Map<string, { x: number; y: number }> {
   const positions = new Map<string, { x: number; y: number }>();
   ids.forEach((id, i) => {
@@ -29,10 +29,10 @@ export function SocialGraph({ onClose, onSelectCreature }: Props) {
 
   return (
     <aside className="social-graph">
-      <button className="creature-card__close" onClick={onClose} aria-label="закрыть">
+      <button className="creature-card__close" onClick={onClose} aria-label="закрыть" type="button">
         ×
       </button>
-      <h2>Социальная карта</h2>
+      <h2>Кто с кем дружит</h2>
       <p>Граф дружб текущей популяции — линия соединяет пары со сформировавшейся дружбой.</p>
       {!graph && <p>Загрузка…</p>}
       {graph && (
@@ -44,12 +44,12 @@ export function SocialGraph({ onClose, onSelectCreature }: Props) {
             return (
               <line
                 key={`${edge.a}-${edge.b}`}
+                className="social-graph__edge"
                 x1={a.x + 20}
                 y1={a.y + 20}
                 x2={b.x + 20}
                 y2={b.y + 20}
-                stroke="#4da6ff"
-                strokeOpacity={0.3 + edge.strength * 0.5}
+                strokeOpacity={0.25 + edge.strength * 0.55}
                 strokeWidth={1 + edge.strength * 2}
               />
             );
@@ -59,8 +59,12 @@ export function SocialGraph({ onClose, onSelectCreature }: Props) {
             if (!p) return null;
             return (
               <g key={node.id} transform={`translate(${p.x + 20}, ${p.y + 20})`} onClick={() => onSelectCreature(node.id)} style={{ cursor: "pointer" }}>
-                <circle r={6} fill={node.species === "orca" ? "#101820" : "#f2f6fa"} stroke="#4da6ff" strokeWidth={1} />
-                <text x={9} y={4} fontSize={10} fill="#dce7f0">
+                <circle
+                  r={6}
+                  className={node.species === "orca" ? "social-graph__node-orca" : "social-graph__node-penguin"}
+                  strokeWidth={1.5}
+                />
+                <text className="social-graph__label" x={9} y={4} fontSize={10}>
                   {node.name}
                 </text>
               </g>

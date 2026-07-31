@@ -815,3 +815,20 @@ event-кандидата (`tests/honesty.test.ts`) — тот хроническ
 убрать: добавлена очистка (`DELETE FROM reflections WHERE creature_id =
 ANY(...)`) созданных этим тестом строк в его конце. Проверено пятью
 подряд прогонами `npm test` (348/348 зелёных) после правки.
+
+## 2026-07-31 — follow-up после анализа: signals/decision_log + fail-rate рефлексий
+
+1. **`signals` и `decision_log` писались только в RAM/Prometheus.** Таблицы А.2
+   существовали, но sim-engine не делал INSERT/UPDATE. Добавлены буферы
+   `drainNewSignals` / `drainResolvedSignals` / `drainDecisionLogs` и запись в
+   `persistTick`. Цели 2/3/8 из раздела 2 теперь проверяемы на горизонте дней.
+
+2. **Ложные отказы валидации по именам из истории.** `rebuildNameToId` брал
+   только unconsumed episodes — повтор имени из `previous_narrative`/старых
+   эпизодов браковался. Расширено участниками всех эпизодов существа и
+   именами из narrative, реально существующими в `creatures` (выдумка вроде
+   «Никита» по-прежнему fail).
+
+3. **Синонимы зон** (`deep_water` → `open_water` и др.) нормализуются в
+   `canonicalizeZone` до проверки whitelist; в system prompt явно перечислены
+   канонические зоны.

@@ -108,14 +108,10 @@ services:
     build:
       context: .
       dockerfile: apps/frontend/Dockerfile
+      args:
+        VITE_API_URL: https://aurwin.ru
+        VITE_WS_URL: wss://aurwin.ru/ws
     restart: unless-stopped
-    environment:
-      # Один публичный домен (ops/caddy/Caddyfile разводит /ws и /api/* на
-      # api-gateway, остальное — сюда) — без этого фронтенд по умолчанию
-      # обратился бы на "<hostname>:3000", которого снаружи docker-сети нет
-      # (api-gateway порт 3000 остаётся забинжен только на 127.0.0.1).
-      VITE_API_URL: https://aurwin.ru
-      VITE_WS_URL: wss://aurwin.ru/ws
     ports:
       - "127.0.0.1:5173:5173"
     depends_on:

@@ -19,6 +19,7 @@ import { HUNT_ATTRACTIVENESS_KEYS, INTENTION_EFFECT_KEYS, TRAIT_KEYS, WEIGHT_NEE
  */
 export function buildSystemPrompt(): string {
   const c = getConstants().reflection;
+  const zones = Object.keys(getConstants().world.zones).join(", ");
   const effectList = INTENTION_EFFECT_KEYS.join(", ");
   const traitList = TRAIT_KEYS.join(", ");
   const weightNeedPaths = WEIGHT_NEED_KEYS.map((k) => `w_need.${k}`).join(", ");
@@ -35,6 +36,10 @@ export function buildSystemPrompt(): string {
     "поступки, персонажей или обманы, отсутствующие во входных данных — даже если это было бы правдоподобно.",
     "Это правило существует именно потому, что в этом мире возможен настоящий обман, и придуманный обман в",
     "тексте неотличим для наблюдателя от настоящего.",
+    "",
+    "ИМЕНА: ссылайся на других существ ТОЛЬКО по именам из входных данных. Если имени нет — пиши безлично",
+    "(«сородич», «касатка», «друг»), НЕ изобретай новое имя вроде человеческого. Склонения существующих имён",
+    "допустимы; новые корни — нет.",
     "",
     "ТОН: сдержанный, спокойный, без натуралистичной жестокости — гибель и охота упоминаются эмоционально,",
     "но без графических деталей.",
@@ -55,7 +60,8 @@ export function buildSystemPrompt(): string {
       " растут только практикой в самой симуляции, LLM их не корректирует.",
     `Поле effect каждого намерения — объект из ключей ТОЛЬКО этого белого списка: ${effectList}.`,
     "У РАЗНЫХ ключей effect РАЗНАЯ форма значения — не путай их:",
-    '  "zone_penalty": {"<имя зоны>": число} — например {"north_bay": 0.5}; так же "zone_bonus".',
+    `  "zone_penalty": {"<имя зоны>": число} — имя зоны ТОЛЬКО из списка: ${zones}.`,
+    `  "zone_bonus": то же самое — только зоны: ${zones}. Нельзя deep_water, ocean, ice и т.п.`,
     '  "approach_bonus": {"creature": "<имя существа>", "value": число}; так же "avoid_creature".',
     '  "seek_mate": true или false (не объект).',
     "Ссылайся на других существ ТОЛЬКО по именам, присутствующим во входных данных (bonds_summary,",

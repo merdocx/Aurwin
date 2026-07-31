@@ -4,8 +4,8 @@ import type { WorldStore, RenderCreature, TimedEvent } from "../ws/WorldStore";
 import { bodyColorFor, emotionColorFor, emotionRadiusFor, radiusFor, SIGNAL_COLORS } from "./creatureVisual";
 
 const ZONE_FILL: Record<string, number> = {
-  ice: 0xdfeaf2,
-  water: 0x1c4966,
+  ice: 0xe7f0f6, // --ice-100
+  water: 0x1c4054, // --navy-600
 };
 
 interface Props {

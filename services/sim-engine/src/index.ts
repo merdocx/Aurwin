@@ -17,12 +17,15 @@ import { isAlive, type WorldEvent } from "./sim/types.js";
 import { createPool } from "./persistence/pool.js";
 import {
   applyDeaths,
+  insertDecisionLogs,
   insertEpisodes,
+  insertSignals,
   insertWorldEvents,
   notifyTick,
   persistGenesis,
   syncAversions,
   syncBonds,
+  updateSignalOutcomes,
   updateWorldClock,
   upsertCreatures,
   type DeathRecord,
@@ -103,6 +106,9 @@ async function persistTick(): Promise<void> {
   const events = pendingEvents;
   const deaths = pendingDeaths;
   const episodes = sim.drainNewEpisodes();
+  const newSignals = sim.drainNewSignals();
+  const resolvedSignals = sim.drainResolvedSignals();
+  const decisionLogs = sim.drainDecisionLogs();
   pendingEvents = [];
   pendingDeaths = [];
 
@@ -114,6 +120,9 @@ async function persistTick(): Promise<void> {
   if (deaths.length > 0) await applyDeaths(pool, deaths);
   if (events.length > 0) await insertWorldEvents(pool, events);
   if (episodes.length > 0) await insertEpisodes(pool, episodes);
+  if (newSignals.length > 0) await insertSignals(pool, newSignals);
+  if (resolvedSignals.length > 0) await updateSignalOutcomes(pool, resolvedSignals);
+  if (decisionLogs.length > 0) await insertDecisionLogs(pool, decisionLogs);
   if (isFullSnapshot) {
     await syncBonds(pool, [...sim.bonds.values()]);
     await syncAversions(pool, [...sim.aversions.values()]);

@@ -1,5 +1,5 @@
 import type { Pool } from "pg";
-import type { AversionRecord, BondRecord, Creature, Episode, WorldEvent } from "../sim/types.js";
+import type { AversionRecord, BondRecord, Creature, DecisionLogEntry, Episode, SignalRecord, WorldEvent } from "../sim/types.js";
 
 /**
  * Персистентность sim-engine (А.3, шаги 13-14; ops/DEVIATIONS.md, фаза 5).
@@ -187,6 +187,52 @@ export async function insertWorldEvents(pool: Pool, events: WorldEvent[]): Promi
   }
   await pool.query(
     `INSERT INTO world_events (id, tick, type, actor_id, target_id, zone, payload) VALUES ${rowPlaceholders.join(", ")} ON CONFLICT (id) DO NOTHING`,
+    values,
+  );
+}
+
+/** INSERT новых сигналов (А.2 `signals`) — outcome может быть pending или уже финальным. */
+export async function insertSignals(pool: Pool, signals: SignalRecord[]): Promise<void> {
+  if (signals.length === 0) return;
+  const values: unknown[] = [];
+  const rowPlaceholders: string[] = [];
+  for (const s of signals) {
+    const row = [s.id, s.senderId, s.tick, s.type, s.zone, s.trueState, s.claimedState, s.outcome, s.receivers];
+    const base = values.length;
+    rowPlaceholders.push(`(${row.map((_, j) => `$${base + j + 1}`).join(", ")})`);
+    values.push(...row);
+  }
+  await pool.query(
+    `INSERT INTO signals (id, sender_id, tick, type, zone, true_state, claimed_state, outcome, receivers)
+     VALUES ${rowPlaceholders.join(", ")} ON CONFLICT (id) DO NOTHING`,
+    values,
+  );
+}
+
+/** UPDATE outcome после подтверждения/опровержения (7.8). */
+export async function updateSignalOutcomes(pool: Pool, signals: SignalRecord[]): Promise<void> {
+  if (signals.length === 0) return;
+  // По одному UPDATE — объём мал (единицы сигналов на тик), а batch UNNEST
+  // по UUID+enum усложняет типы без выигрыша на этом масштабе.
+  for (const s of signals) {
+    if (s.outcome === "pending") continue;
+    await pool.query(`UPDATE signals SET outcome = $2 WHERE id = $1 AND outcome = 'pending'`, [s.id, s.outcome]);
+  }
+}
+
+/** INSERT сэмплированных utility-решений (А.2 `decision_log`, семплинг А.9). */
+export async function insertDecisionLogs(pool: Pool, entries: DecisionLogEntry[]): Promise<void> {
+  if (entries.length === 0) return;
+  const values: unknown[] = [];
+  const rowPlaceholders: string[] = [];
+  for (const e of entries) {
+    const row = [e.creatureId, e.tick, e.chosenAction, JSON.stringify(e.factors)];
+    const base = values.length;
+    rowPlaceholders.push(`(${row.map((_, j) => `$${base + j + 1}`).join(", ")})`);
+    values.push(...row);
+  }
+  await pool.query(
+    `INSERT INTO decision_log (creature_id, tick, chosen_action, factors) VALUES ${rowPlaceholders.join(", ")}`,
     values,
   );
 }

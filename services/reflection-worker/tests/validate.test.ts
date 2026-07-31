@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findUngroundedNames, validateReflectionResponse, type ValidationContext } from "../src/validate.js";
+import { canonicalizeZone, findUngroundedNames, validateReflectionResponse, type ValidationContext } from "../src/validate.js";
 
 function baseCtx(overrides: Partial<ValidationContext> = {}): ValidationContext {
   return {
@@ -145,5 +145,20 @@ describe("validate.ts: честность повествования (7.8.6) —
     );
     expect(result.ok).toBe(false);
     expect(result.errors.some((e) => e.includes("7.8.6"))).toBe(true);
+  });
+});
+
+
+describe("validate.ts: canonicalizeZone", () => {
+  it("нормализует deep_water → open_water и принимает ответ", () => {
+    expect(canonicalizeZone("deep_water", baseCtx().knownZones)).toBe("open_water");
+    const result = validateReflectionResponse(
+      validResponse({
+        intentions: [{ text: "избегать глубины", effect: { zone_penalty: { deep_water: 0.5 } } }],
+      }),
+      baseCtx(),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.value?.intentions[0].effect.zone_penalty?.open_water).toBeCloseTo(0.5, 6);
   });
 });

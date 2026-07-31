@@ -1,0 +1,11 @@
+:root{
+--radius-s:6px;--radius-m:10px;--radius-l:16px;--radius-xl:24px;--radius-pill:999px;
+--shadow-color:215 45% 18%;
+--shadow-s:0 1px 2px hsl(var(--shadow-color)/.08),0 1px 1px hsl(var(--shadow-color)/.06);
+--shadow-m:0 4px 12px hsl(var(--shadow-color)/.10),0 1px 2px hsl(var(--shadow-color)/.06);
+--shadow-l:0 12px 32px hsl(var(--shadow-color)/.16),0 2px 6px hsl(var(--shadow-color)/.08);
+--glow-teal:0 0 24px rgba(87,225,176,.35);
+--glow-violet:0 0 24px rgba(140,125,224,.35);
+--blur-scrim:12px;
+}
+[data-theme="night"]{--shadow-color:210 60% 3%;}

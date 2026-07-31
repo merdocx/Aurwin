@@ -148,6 +148,17 @@ export class Simulation {
    * memory.ts, дублирующая информация уже есть в habits существа).
    */
   private episodesThisTick: Episode[] = [];
+  /**
+   * Сигналы, созданные с последнего drain (INSERT в `signals`). Outcome на
+   * момент создания может быть уже финальным (stealth_approach всегда
+   * disconfirmed сразу, 7.8.2) или pending — тогда UPDATE придёт через
+   * `signalsResolvedThisTick` после разрешения.
+   */
+  private signalsCreatedThisTick: SignalRecord[] = [];
+  /** Сигналы, у которых outcome сменился с pending на confirmed/disconfirmed. */
+  private signalsResolvedThisTick: SignalRecord[] = [];
+  /** Сэмплированные utility-решения с последнего drain (INSERT в `decision_log`). */
+  private decisionLogsThisTick: DecisionLogEntry[] = [];
   private recentPredation: Array<{ zone: ZoneName; tick: number }> = [];
   private observedCohort = new Set<string>();
   private eventWindowUntil = new Map<string, number>();
@@ -196,6 +207,36 @@ export class Simulation {
     const batch = this.episodesThisTick;
     this.episodesThisTick = [];
     return batch;
+  }
+
+  /** Новые сигналы для INSERT в Postgres (А.2 `signals`). */
+  drainNewSignals(): SignalRecord[] {
+    const batch = this.signalsCreatedThisTick;
+    this.signalsCreatedThisTick = [];
+    return batch;
+  }
+
+  /** Сигналы с обновлённым outcome для UPDATE в Postgres. */
+  drainResolvedSignals(): SignalRecord[] {
+    const batch = this.signalsResolvedThisTick;
+    this.signalsResolvedThisTick = [];
+    return batch;
+  }
+
+  /** Сэмплированные решения для INSERT в `decision_log` (А.2, семплинг А.2/А.9). */
+  drainDecisionLogs(): DecisionLogEntry[] {
+    const batch = this.decisionLogsThisTick;
+    this.decisionLogsThisTick = [];
+    return batch;
+  }
+
+  private trackCreatedSignal(record: SignalRecord): void {
+    this.signalsCreatedThisTick.push(record);
+    if (record.outcome !== "pending") this.signalsResolvedThisTick.push(record);
+  }
+
+  private trackResolvedSignals(resolved: SignalRecord[]): void {
+    for (const s of resolved) this.signalsResolvedThisTick.push(s);
   }
 
   private emitWorldEvent(event: Omit<WorldEvent, "id">): void {
@@ -264,7 +305,14 @@ export class Simulation {
       decisions.set(creature.id, decision);
       creature.actionCounts[decision.action] = (creature.actionCounts[decision.action] ?? 0) + 1;
       if (this.shouldLogDecision(creature.id)) {
-        this.decisionLog.push({ creatureId: creature.id, tick: this.tick_, chosenAction: decision.action, factors: decision.factors });
+        const entry: DecisionLogEntry = {
+          creatureId: creature.id,
+          tick: this.tick_,
+          chosenAction: decision.action,
+          factors: decision.factors,
+        };
+        this.decisionLog.push(entry);
+        this.decisionLogsThisTick.push(entry);
         if (this.decisionLog.length > this.decisionLogCap) this.decisionLog.shift();
       }
     }
@@ -481,6 +529,7 @@ export class Simulation {
               this.nextId,
             );
             this.pendingSignals.push(record);
+            this.trackCreatedSignal(record);
             this.acc.signalsSent["display_vigor"] = (this.acc.signalsSent["display_vigor"] ?? 0) + 1;
             // Наблюдаемость (6.1): подача display_vigor должна быть заметна на карте,
             // не только в служебной таблице signals.
@@ -503,6 +552,7 @@ export class Simulation {
             this.nextId,
           );
           this.pendingSignals.push(record);
+          this.trackCreatedSignal(record);
           this.acc.signalsSent["alarm_call"] = (this.acc.signalsSent["alarm_call"] ?? 0) + 1;
           // Наблюдаемость (6.1): "тревога — самое драматичное, что происходит
           // в этом мире, и её нельзя оставлять только в логах".
@@ -532,6 +582,7 @@ export class Simulation {
             resolveStealthApproach(creature, target, this.tick_);
             const record = resolveSignal(creature, "stealth_approach", target.zone, 1, 0, [target], this.tick_, 0, this.nextId);
             record.outcome = "disconfirmed"; // "Всегда по существу" (7.8.2) — известно сразу.
+            this.trackCreatedSignal(record);
             this.acc.signalsSent["stealth_approach"] = (this.acc.signalsSent["stealth_approach"] ?? 0) + 1;
             this.acc.signalsDisconfirmed["stealth_approach"] = (this.acc.signalsDisconfirmed["stealth_approach"] ?? 0) + 1;
           }
@@ -583,7 +634,15 @@ export class Simulation {
     this.recentPredation.push({ zone: prey.zone, tick: this.tick_ });
 
     const pendingForPrey = this.pendingSignals.filter((s) => s.senderId === prey.id && s.type === "display_vigor" && s.outcome === "pending");
-    if (pendingForPrey.length > 0) resolveDisplayVigorAgainstHunt(prey, orca, pendingForPrey, outcome.caught, outcome.noticedInAdvance);
+    if (pendingForPrey.length > 0) {
+      const resolved = resolveDisplayVigorAgainstHunt(prey, orca, pendingForPrey, outcome.caught, outcome.noticedInAdvance);
+      this.trackResolvedSignals(resolved);
+      for (const s of resolved) {
+        if (s.outcome === "disconfirmed") {
+          this.acc.signalsDisconfirmed["display_vigor"] = (this.acc.signalsDisconfirmed["display_vigor"] ?? 0) + 1;
+        }
+      }
+    }
 
     if (outcome.caught) {
       this.emitWorldEvent({ tick: this.tick_, type: "hunt_success", actorId: orca.id, targetId: prey.id, zone: prey.zone, payload: {} });
@@ -691,10 +750,11 @@ export class Simulation {
     // Разрешение alarm_call по истечении окна.
     const expiredAlarms = this.pendingSignals.filter((s) => s.type === "alarm_call" && s.outcome === "pending" && this.tick_ >= s.resolveByTick);
     if (expiredAlarms.length > 0) {
-      resolveAlarmCallsOnExpiry(expiredAlarms, this.tick_, byId, (zone, sinceTick) =>
+      const resolvedAlarms = resolveAlarmCallsOnExpiry(expiredAlarms, this.tick_, byId, (zone, sinceTick) =>
         this.recentPredation.some((p) => p.zone === zone && p.tick >= sinceTick),
       );
-      for (const s of expiredAlarms) {
+      this.trackResolvedSignals(resolvedAlarms);
+      for (const s of resolvedAlarms) {
         if (s.outcome === "disconfirmed") this.acc.signalsDisconfirmed["alarm_call"] = (this.acc.signalsDisconfirmed["alarm_call"] ?? 0) + 1;
       }
     }
@@ -707,6 +767,7 @@ export class Simulation {
         if (receiver) applyTrustUpdate(receiver, s.senderId, true);
       }
     }
+    this.trackResolvedSignals(expiredVigor);
     this.pendingSignals = this.pendingSignals.filter((s) => s.outcome === "pending");
 
     // Reproduction — проверка допустимых пар среди друзей/партнёров.

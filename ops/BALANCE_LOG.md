@@ -144,3 +144,22 @@ base_hunt_success_probability` (летальность охоты) — оба я
 трогать (п.9). Мониторинг — через `aurwin_population`/`aurwin_deaths_total`
 в Prometheus (уже развёрнут, см. `ops/observability/`) и алёрты
 `AurwinPenguinPopulationOutOfRange`/`AurwinOrcaPopulationOutOfRange`.
+
+## 2026-07-31 — дожим баланса после приёмки фазы 7 (live 178/25)
+
+Живой мир к моменту анализа: тик ~9800, пингвины 178 (алёрт max 120),
+касатки 25 (алёрт max 12). Оба `Aurwin*PopulationOutOfRange` firing.
+Предыдущая правка (hunt 0.20, fish 0.028/0.010) ещё не успела стабилизировать
+боевую популяцию — двойной genesis и накопленный рост выше порогов.
+
+Изменения (без трогания genesis, п.9):
+
+1. `world.base_hunt_success_probability`: **0.20 -> 0.25** (следующий шаг,
+   явно рекомендованный в предыдущей записи BALANCE_LOG).
+2. `world.fish_respawn_per_tick`: `north_bay 0.028 -> 0.020`,
+   `south_shallows 0.010 -> 0.007` (−29%/−30%).
+
+Проверка направления — `npm run simulate -- --days 3 --fast --seed 1`
+(сравнимо с предыдущим сравнительным прогоном) и полный гейт
+`--days 30 --fast --seed 1` (отчёт в `ops/reports/phase-4.md`).
+Мониторинг live: Prometheus `aurwin_population` / алёрты популяции.

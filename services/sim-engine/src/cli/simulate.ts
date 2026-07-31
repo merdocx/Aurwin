@@ -151,6 +151,16 @@ function main(): void {
 
   function runTick(): void {
     sim.tick();
+    // CLI не пишет в Postgres — но drain-буферы (episodes/signals/decision_log)
+    // всё равно наполняются на каждом тике. Без сброса они держат весь
+    // 30-суточный прогон в RAM и убивают процесс OOM (exit 137) уже на
+    // ~30% 3-суточного прогона на хосте без swap. Discard здесь безопасен:
+    // отчёт фазы 4 читает sim.acc / creatures / decisionLog (ring), не эти
+    // drain-буферы.
+    sim.drainNewEpisodes();
+    sim.drainNewSignals();
+    sim.drainResolvedSignals();
+    sim.drainDecisionLogs();
 
     const alive = [...sim.creatures.values()];
     let penguins = 0;

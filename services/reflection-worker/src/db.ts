@@ -125,6 +125,47 @@ export async function fetchUnconsumedEpisodes(pool: Pool, creatureId: string): P
   return result.rows;
 }
 
+/**
+ * Участники ВСЕХ эпизодов существа (включая уже поглощённые рефлексией) —
+ * нужны для nameToId при валидации ответа: previous_narrative и старые факты
+ * карточки часто содержат имена из прошлых эпизодов, которых нет в текущем
+ * new_episodes; без них валидатор ложно браковал честные пересказы
+ * (см. ops/DEVIATIONS.md, 2026-07-31).
+ */
+export async function fetchAllEpisodeParticipantNames(pool: Pool, creatureId: string): Promise<Map<string, string>> {
+  const result = await pool.query<{ id: string; name: string }>(
+    `
+    SELECT DISTINCT c.id, c.name
+    FROM episodes e
+    CROSS JOIN LATERAL unnest(e.participants) AS pid(id)
+    JOIN creatures c ON c.id = pid.id
+    WHERE e.creature_id = $1
+    `,
+    [creatureId],
+  );
+  return new Map(result.rows.map((r) => [r.name, r.id]));
+}
+
+/**
+ * Имена из previous_narrative, которые реально существуют в creatures —
+ * разрешает повторное упоминание уже известных существу существ без
+ * расширения whitelist на всю популяцию (7.8.6: выдумка вроде «Никита»
+ * по-прежнему отбраковывается).
+ */
+export async function fetchNamesMentionedInNarrative(pool: Pool, narrative: string): Promise<Map<string, string>> {
+  if (!narrative.trim()) return new Map();
+  const result = await pool.query<{ id: string; name: string }>(`SELECT id, name FROM creatures`);
+  const out = new Map<string, string>();
+  const lowerNarrative = narrative.toLowerCase();
+  for (const row of result.rows) {
+    if (row.name.length < 2) continue;
+    // Префикс имени (без падежного хвоста) должен встречаться в тексте.
+    const stem = row.name.slice(0, Math.max(2, row.name.length - 1)).toLowerCase();
+    if (lowerNarrative.includes(stem)) out.set(row.name, row.id);
+  }
+  return out;
+}
+
 async function resolveNames(pool: Pool, ids: string[]): Promise<Map<string, string>> {
   if (ids.length === 0) return new Map();
   const result = await pool.query<{ id: string; name: string }>(`SELECT id, name FROM creatures WHERE id = ANY($1::uuid[])`, [ids]);

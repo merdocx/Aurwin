@@ -32,3 +32,6 @@ ops/backup/dumps/
 *.swp
 .vscode/
 .idea/
+
+# Claude Code local agent settings
+.claude/

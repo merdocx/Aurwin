@@ -99,6 +99,32 @@ export function findUngroundedNames(text: string, knownNames: Set<string>): stri
   return [...new Set(ungrounded)];
 }
 
+/**
+ * Синонимы зон, которые модель иногда подставляет вместо канонических имён
+ * из constants.yaml (наблюдалось: "deep_water" вместо open_water). Не расширяет
+ * карту мира — только нормализует к whitelist перед проверкой.
+ */
+const ZONE_ALIASES: Record<string, string> = {
+  deep_water: "open_water",
+  deepwater: "open_water",
+  ocean: "open_water",
+  sea: "open_water",
+  openwater: "open_water",
+  colony: "main_ice",
+  ice: "main_ice",
+  ice_floe: "main_ice",
+  bay: "north_bay",
+  shallows: "south_shallows",
+  refuge: "far_ice",
+};
+
+export function canonicalizeZone(zone: string, knownZones: Set<string>): string | undefined {
+  if (knownZones.has(zone)) return zone;
+  const aliased = ZONE_ALIASES[zone.toLowerCase()];
+  if (aliased && knownZones.has(aliased)) return aliased;
+  return undefined;
+}
+
 function resolveCreatureRef(
   raw: unknown,
   ctx: ValidationContext,
@@ -241,12 +267,13 @@ export function validateReflectionResponse(raw: string, ctx: ValidationContext):
           }
           const resolvedZones: Record<string, number> = {};
           for (const [zone, value] of Object.entries(zones as Record<string, unknown>)) {
-            if (!ctx.knownZones.has(zone) || !isFiniteNumber(value) || Math.abs(value) > 1) {
+            const canonical = canonicalizeZone(zone, ctx.knownZones);
+            if (!canonical || !isFiniteNumber(value) || Math.abs(value) > 1) {
               errors.push(`intentions[].effect.${key}: недопустимая зона/значение "${zone}"`);
               intentionValid = false;
               break;
             }
-            resolvedZones[zone] = value;
+            resolvedZones[canonical] = value;
           }
           if (!intentionValid) break;
           effect[key] = resolvedZones;

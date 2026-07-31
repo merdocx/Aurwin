@@ -14,4 +14,9 @@ export default defineConfig({
     // This host is not allowed".
     allowedHosts: ["aurwin.ru"],
   },
+  preview: {
+    host: true,
+    port: 5173,
+    allowedHosts: ["aurwin.ru"],
+  },
 });

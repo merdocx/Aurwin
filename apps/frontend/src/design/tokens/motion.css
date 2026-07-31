@@ -1,0 +1,33 @@
+:root{
+--ease-standard:cubic-bezier(.4,0,.2,1);/* @kind other */
+--ease-out:cubic-bezier(0,0,.2,1);/* @kind other */
+--ease-in:cubic-bezier(.4,0,1,1);/* @kind other */
+--ease-drift:cubic-bezier(.3,.1,.2,1);/* @kind other */
+--duration-fast:120ms;/* @kind other */
+--duration-base:200ms;/* @kind other */
+--duration-slow:420ms;/* @kind other */
+--duration-drift:2400ms;/* @kind other */
+}
+@keyframes aur-fade-in{from{opacity:0}to{opacity:1}}
+@keyframes aur-rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+@keyframes aur-pulse-glow{0%,100%{opacity:.55}50%{opacity:1}}
+@keyframes aur-drift{0%{transform:translate(0,0)}50%{transform:translate(3px,-2px)}100%{transform:translate(0,0)}}
+@keyframes aur-waddle{0%,100%{transform:translate(-2px,0) rotate(-9deg)}50%{transform:translate(2px,0) rotate(9deg)}}
+@keyframes aur-swim-cycle{0%,100%{transform:translate(-15px,-2px)}50%{transform:translate(15px,2px)}}
+@keyframes aur-hunt-glide{0%,100%{transform:translate(-9px,0)}50%{transform:translate(9px,0)}}
+@keyframes aur-sleep-breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.025)}}
+@keyframes aur-eat-dip{0%,20%,100%{transform:rotate(0deg) translateY(0)}45%{transform:rotate(11deg) translateY(3px)}70%{transform:rotate(11deg) translateY(3px)}}
+@keyframes aur-splash-pop{0%{transform:scale(.3);opacity:.9}70%{transform:scale(1.7);opacity:.3}100%{transform:scale(2.2);opacity:0}}
+@keyframes aur-signal-ring{0%{transform:scale(.4);opacity:.9}100%{transform:scale(2.4);opacity:0}}
+@keyframes aur-event-badge{0%{opacity:0;transform:translateY(4px) scale(.9)}15%{opacity:1;transform:translateY(0) scale(1)}80%{opacity:1}100%{opacity:0;transform:translateY(-6px) scale(.96)}}
+@keyframes aur-hunt-dash{to{stroke-dashoffset:-24}}
+@keyframes aur-fish-swim{0%,100%{transform:translateX(-12px) rotate(-5deg)}50%{transform:translateX(12px) rotate(5deg)}}
+@keyframes aur-leg-step-l{0%,100%{transform:rotate(-18deg) translateY(2px)}50%{transform:rotate(16deg) translateY(-4px)}}
+@keyframes aur-leg-step-r{0%,100%{transform:rotate(18deg) translateY(-4px)}50%{transform:rotate(-16deg) translateY(2px)}}
+@keyframes aur-footprint-l{0%,40%{opacity:0}55%{opacity:.5}90%{opacity:.5}100%{opacity:0}}
+@keyframes aur-footprint-r{0%,90%{opacity:0}5%{opacity:0}20%{opacity:.5}55%{opacity:.5}70%{opacity:0}100%{opacity:0}}
+@keyframes aur-tail-swish{0%,100%{transform:rotate(-12deg)}50%{transform:rotate(12deg)}}
+@keyframes aur-fin-flutter{0%,100%{transform:rotate(-6deg)}50%{transform:rotate(8deg)}}
+@keyframes aur-chomp{0%,100%{transform:scaleY(1)}50%{transform:scaleY(0.55)}}
+@keyframes aur-jump-arc{0%{transform:translateY(0) rotate(0deg) scale(1)}30%{transform:translateY(-26px) rotate(-10deg) scale(1.05)}60%{transform:translateY(-26px) rotate(10deg) scale(1.05)}100%{transform:translateY(0) rotate(0deg) scale(1)}}
+@keyframes aur-trail-fade{0%{opacity:.4}100%{opacity:0}}
