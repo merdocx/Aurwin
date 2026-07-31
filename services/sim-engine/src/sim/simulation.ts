@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Rng, clamp } from "./rng.js";
 import { getSimConstants } from "./simConstants.js";
 import { NameGenerator } from "./names.js";
@@ -99,7 +100,6 @@ export class Simulation {
   readonly recentWorldEvents: WorldEvent[] = [];
 
   private tick_ = 0;
-  private idCounter = 0;
   private nameGen = new NameGenerator();
   private spatialIndex = new SpatialGrid<IndexedPoint>(WITNESS_QUERY_CELL_SIZE);
   private pendingReflections: PendingReflection[] = [];
@@ -120,7 +120,16 @@ export class Simulation {
     this.rotateObservedCohort();
   }
 
-  private nextId = (): string => `c${this.idCounter++}`;
+  /**
+   * Реальный UUID (не последовательный "c0","c1"...): id существа —
+   * одновременно первичный ключ `creatures.id UUID` в Postgres (фаза 5,
+   * персистентность). `bonds`/`aversions` полагаются на лексикографический
+   * "UUID-порядок" (см. комментарий в migrations/003_bonds.cjs) для
+   * канонической пары creature_a < creature_b — сравнение строк работает
+   * одинаково что для последовательных, что для случайных id, инвариант не
+   * страдает.
+   */
+  private nextId = (): string => randomUUID();
 
   get currentTick(): number {
     return this.tick_;
@@ -412,6 +421,9 @@ export class Simulation {
             );
             this.pendingSignals.push(record);
             this.acc.signalsSent["display_vigor"] = (this.acc.signalsSent["display_vigor"] ?? 0) + 1;
+            // Наблюдаемость (6.1): подача display_vigor должна быть заметна на карте,
+            // не только в служебной таблице signals.
+            this.emitWorldEvent({ tick: this.tick_, type: "signal_sent", actorId: creature.id, targetId: target.id, zone: creature.zone, payload: { signalType: "display_vigor" } });
           }
           break;
         }
@@ -431,6 +443,9 @@ export class Simulation {
           );
           this.pendingSignals.push(record);
           this.acc.signalsSent["alarm_call"] = (this.acc.signalsSent["alarm_call"] ?? 0) + 1;
+          // Наблюдаемость (6.1): "тревога — самое драматичное, что происходит
+          // в этом мире, и её нельзя оставлять только в логах".
+          this.emitWorldEvent({ tick: this.tick_, type: "signal_sent", actorId: creature.id, zone: creature.zone, payload: { signalType: "alarm_call" } });
           const woken = wakeSleepersOnAlarm(creature, audience, this.rng);
           for (const w of woken) {
             recordEpisode(w, this.tick_, { type: "woken_by_alarm", participants: [creature.id], significance: getSimConstants().episode_significance.woken_by_alarm, zone: creature.zone }, this.nextId);

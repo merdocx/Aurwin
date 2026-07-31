@@ -201,6 +201,13 @@ const EXPECTED_PATHS = [
   "episode_significance.grew_old",
   "episode_significance.signal_disconfirmed_against_me",
   "episode_significance.woken_by_alarm",
+  // Фаза 5 «Наблюдение» — лимиты публичного API (А.6), вне табл. А.9
+  // дословно (обоснование — ops/DEVIATIONS.md).
+  "api.rest_rate_limit_per_minute",
+  "api.social_graph_cache_seconds",
+  "api.ws_max_connections_per_ip",
+  "api.ws_idle_timeout_minutes",
+  "api.ws_max_total_connections",
 ];
 
 describe("config/constants.yaml", () => {

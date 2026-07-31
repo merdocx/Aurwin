@@ -66,7 +66,15 @@ export function createGenesisCreature(species: Species, sex: Sex, opts: GenesisO
   const stages = species === "penguin" ? constants.life_stages.penguin_weeks : constants.life_stages.orca_weeks;
   const ageWeeks = rng.range(stages.juvenile, stages.adult);
   // ageWeeks (внутренние недели) численно равны реальным суткам (6.2, sim/time.ts).
-  const bornAtTick = tick - realDaysToTicks(ageWeeks);
+  // Тик — дискретный счётчик (Simulation.tick_ всегда целый), поэтому
+  // "задатированный назад" born_at_tick genesis-особи округляется до целого:
+  // без округления получался дробный (и для более старших особей —
+  // отрицательный на десятки/сотни тысяч) tick, который не проходил
+  // персистентность в Postgres (`born_at_tick BIGINT`, А.2) — обнажилось
+  // первым же docker compose up фазы 5, см. ops/DEVIATIONS.md. Округление
+  // сдвигает возраст особи не более чем на полтика (~1 сек реального
+  // времени) — пренебрежимо на фоне недель жизни вида.
+  const bornAtTick = Math.round(tick - realDaysToTicks(ageWeeks));
 
   const traits = randomTraits(rng);
   const pos = spawnPosition(species, rng);

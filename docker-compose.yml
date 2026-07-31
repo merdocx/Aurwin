@@ -29,6 +29,15 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      # sim-engine — единственный писатель игрового состояния (А.1): пишет
+      # напрямую в Postgres по имени сервиса "postgres" во внутренней сети
+      # compose (порт наружу не публикуется, CLAUDE.md/А.7).
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: aurwin
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: aurwin
     depends_on:
       postgres:
         condition: service_healthy
@@ -51,6 +60,14 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      # api-gateway — только читатель БД (А.1): те же PG*-переменные, что и
+      # sim-engine, но эта служба никогда не пишет игровое состояние.
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: aurwin
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: aurwin
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:

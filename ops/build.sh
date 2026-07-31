@@ -10,6 +10,7 @@ START="${1:-1}"
 for phase in $(seq "$START" 7); do
   case $phase in
     4) TURNS=500 ;;
+    5) TURNS=400 ;;
     6) TURNS=250 ;;
     *) TURNS=150 ;;
   esac

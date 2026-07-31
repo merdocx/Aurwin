@@ -1,0 +1,182 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: #0b1a24;
+  color: #dce7f0;
+  font-family: system-ui, sans-serif;
+  overflow: hidden;
+}
+
+.app {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+}
+
+.hud {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  background: rgba(11, 26, 36, 0.75);
+  padding: 8px 14px;
+  border-radius: 8px;
+  backdrop-filter: blur(4px);
+  z-index: 5;
+  font-size: 14px;
+}
+
+.hud__brand {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.hud__phase--night {
+  color: #93b4ff;
+}
+
+.hud__phase--day {
+  color: #ffd47a;
+}
+
+.hud__status--open {
+  color: #7be07b;
+}
+
+.hud__status--rejected,
+.hud__status--closed {
+  color: #ff8a8a;
+}
+
+.hud__button {
+  background: #1c4966;
+  color: #dce7f0;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.hud__button:hover {
+  background: #26608a;
+}
+
+.hud__error {
+  position: absolute;
+  top: 60px;
+  left: 12px;
+  background: #4a1c1c;
+  color: #ffd9d9;
+  padding: 8px 14px;
+  border-radius: 8px;
+  z-index: 5;
+}
+
+.hud-hint {
+  position: absolute;
+  bottom: 10px;
+  left: 12px;
+  font-size: 12px;
+  opacity: 0.6;
+  z-index: 5;
+}
+
+.creature-card,
+.social-graph {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 340px;
+  max-width: 90vw;
+  height: 100%;
+  overflow-y: auto;
+  background: rgba(9, 20, 28, 0.95);
+  padding: 20px;
+  z-index: 6;
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.4);
+}
+
+.creature-card h2,
+.social-graph h2 {
+  margin-top: 0;
+}
+
+.creature-card h3 {
+  font-size: 13px;
+  text-transform: uppercase;
+  opacity: 0.7;
+  margin-bottom: 6px;
+}
+
+.creature-card__close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: none;
+  border: none;
+  color: #dce7f0;
+  font-size: 22px;
+  cursor: pointer;
+}
+
+.creature-card__subtitle {
+  opacity: 0.8;
+  font-size: 13px;
+}
+
+.creature-card__dead {
+  color: #ff8a8a;
+}
+
+.creature-card__traits {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.creature-card__traits li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.creature-card__traits li span {
+  width: 90px;
+  flex-shrink: 0;
+}
+
+.creature-card__bar {
+  flex: 1;
+  height: 6px;
+  background: #1c2b36;
+  border-radius: 3px;
+  overflow: hidden;
+  display: inline-block;
+}
+
+.creature-card__bar-fill {
+  display: block;
+  height: 100%;
+  background: #4da6ff;
+}
+
+.creature-card__timeline {
+  padding-left: 18px;
+  font-size: 12px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.creature-card__error {
+  color: #ff8a8a;
+}

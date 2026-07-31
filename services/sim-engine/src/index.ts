@@ -1,30 +1,89 @@
 // sim-engine — тик-цикл 24/7 (ТЗ А.1, А.3).
-// Фаза 3 «Мир»: карта/зоны/рыба/сутки (services/world) тикают по-настоящему.
-// Существа, utility AI и запись состояния в БД — фаза 4+.
+// Фаза 5 «Наблюдение»: полноценная Simulation (существа + utility AI, фаза 4)
+// тикает и пишет состояние в Postgres — persistSnapshot (шаг 14) и
+// broadcastDelta (шаг 13) из А.3 больше не заглушки (см. ops/DEVIATIONS.md,
+// фаза 5, где обосновано разделение "лёгкой" записи каждый тик и "полного"
+// снапшота раз в time.snapshot_interval_ticks, и канал LISTEN/NOTIFY
+// вместо прямого соединения с api-gateway).
+//
 // Симуляция никогда не блокируется на LLM-вызове (7.3) — этот процесс не
-// импортирует и не вызывает reflection-worker напрямую, только читает
-// результаты рефлексии из БД (см. А.1: "sim-engine — единственный писатель
-// игрового состояния").
+// импортирует и не вызывает reflection-worker напрямую (рефлексия замокана,
+// generateMockReflection — CLAUDE.md, п.7); ошибки записи в БД логируются и
+// НЕ останавливают тик-цикл (мир не должен замирать из-за сетевого сбоя).
 
-import { getWorldConstants, World } from "./world/index.js";
+import { Simulation } from "./sim/simulation.js";
+import { getSimConstants } from "./sim/simConstants.js";
+import { isAlive, type WorldEvent } from "./sim/types.js";
+import { createPool } from "./persistence/pool.js";
+import { applyDeaths, insertWorldEvents, notifyTick, syncBonds, updateWorldClock, upsertCreatures, type DeathRecord } from "./persistence/persist.js";
 
-console.log("[sim-engine] запуск тик-цикла мира (фаза 3 «Мир»)");
+console.log("[sim-engine] запуск тик-цикла мира (фаза 5 «Наблюдение»)");
 
-const world = new World();
-const { visual_tick_seconds } = getWorldConstants().time;
-let lastPhase = world.dayNight.phase();
+const pool = createPool();
+const { visual_tick_seconds, snapshot_interval_ticks } = getSimConstants().time;
 
-const timer = setInterval(() => {
-  world.tick();
-  const phase = world.dayNight.phase();
-  if (phase !== lastPhase) {
-    console.log(`[sim-engine] смена суток: ${lastPhase} -> ${phase} (тик ${world.dayNight.currentTick})`);
-    lastPhase = phase;
+const seed = Number(process.env.AURWIN_SEED ?? Date.now() % 1_000_000);
+let pendingEvents: WorldEvent[] = [];
+let pendingDeaths: DeathRecord[] = [];
+
+const sim = new Simulation(seed, {
+  onWorldEvent: (event) => {
+    pendingEvents.push(event);
+    if (event.type === "death" && event.actorId) {
+      const cause = (event.payload as { cause?: DeathRecord["cause"] }).cause;
+      if (cause) pendingDeaths.push({ id: event.actorId, cause, tick: event.tick });
+    }
+  },
+});
+
+let lastPhase = sim.world.dayNight.phase();
+let stopped = false;
+
+async function persistTick(): Promise<void> {
+  const events = pendingEvents;
+  const deaths = pendingDeaths;
+  pendingEvents = [];
+  pendingDeaths = [];
+
+  const alive = sim.aliveCreatures();
+  const phase = sim.world.dayNight.phase();
+  const isFullSnapshot = sim.currentTick % snapshot_interval_ticks === 0;
+
+  await upsertCreatures(pool, alive, isFullSnapshot ? "full" : "light");
+  if (deaths.length > 0) await applyDeaths(pool, deaths);
+  if (events.length > 0) await insertWorldEvents(pool, events);
+  if (isFullSnapshot) await syncBonds(pool, [...sim.bonds.values()]);
+  await updateWorldClock(pool, sim.currentTick, phase);
+  await notifyTick(pool, sim.currentTick, phase);
+}
+
+async function loop(): Promise<void> {
+  if (stopped) return;
+  const start = Date.now();
+  try {
+    sim.tick();
+    const phase = sim.world.dayNight.phase();
+    if (phase !== lastPhase) {
+      console.log(`[sim-engine] смена суток: ${lastPhase} -> ${phase} (тик ${sim.currentTick})`);
+      lastPhase = phase;
+    }
+    await persistTick();
+  } catch (err) {
+    // Сбой записи в БД (сеть/рестарт Postgres) не должен останавливать
+    // тик-цикл — мир должен продолжать жить даже если наблюдатели временно
+    // ничего не увидят (6.1: сервер тикает независимо от подключений).
+    console.error("[sim-engine] ошибка в тике/персистентности:", err);
   }
-}, visual_tick_seconds * 1000);
+  const elapsed = Date.now() - start;
+  const delay = Math.max(0, visual_tick_seconds * 1000 - elapsed);
+  if (!stopped) setTimeout(loop, delay);
+}
+
+console.log(`[sim-engine] genesis-популяция: ${sim.aliveCreatures().length} существ, seed=${seed}`);
+loop();
 
 process.on("SIGTERM", () => {
   console.log("[sim-engine] получен SIGTERM, завершение");
-  clearInterval(timer);
-  process.exit(0);
+  stopped = true;
+  pool.end().finally(() => process.exit(0));
 });

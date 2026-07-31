@@ -24,6 +24,11 @@ export class DayNightCycle {
     this.tickCount += 1;
   }
 
+  /** Восстановление после рестарта процесса (фаза 5): переносит счётчик на уже прожитый тик мира вместо прогона тиков в цикле. */
+  fastForwardTo(tick: number): void {
+    this.tickCount = tick;
+  }
+
   get currentTick(): number {
     return this.tickCount;
   }
