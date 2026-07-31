@@ -1,0 +1,9 @@
+[Unit]
+Description=Aurwin — плановый pg_dump (ТЗ А.7, фаза 7 «Эксплуатация»)
+Documentation=file:///opt/aurwin/ops/README.md
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/aurwin
+ExecStart=/opt/aurwin/ops/backup/pg_dump.sh

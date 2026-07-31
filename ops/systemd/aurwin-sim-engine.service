@@ -1,0 +1,25 @@
+[Unit]
+Description=Aurwin — sim-engine (тик-цикл мира, ТЗ А.1, А.7 «Деплой и эксплуатация»)
+Documentation=file:///opt/aurwin/ops/README.md
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+# docker-compose уже держит sim-engine на restart:unless-stopped (dockerd
+# сам поднимает его при своём рестарте) — этот юнит не заменяет ту политику,
+# а даёт явный, поимённый рычаг систем-администрирования (systemctl
+# start/stop/restart aurwin-sim-engine) и гарантированный порядок запуска
+# после старта Docker при загрузке сервера (гейт фазы 7: "перезагрузка
+# сервера -> мир поднимается из снапшота автоматически").
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/aurwin
+ExecStart=/usr/bin/docker compose up -d sim-engine
+ExecStop=/usr/bin/docker compose stop sim-engine
+TimeoutStartSec=120
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Aurwin — плановое обслуживание ретенции (ТЗ А.2, А.9, фаза 7)
+Documentation=file:///opt/aurwin/ops/README.md
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/aurwin
+ExecStart=/opt/aurwin/ops/retention/run.sh

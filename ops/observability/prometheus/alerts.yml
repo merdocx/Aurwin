@@ -1,0 +1,64 @@
+# Правила алёртов (ТЗ А.7, фаза 7 «Эксплуатация»).
+#
+# ВАЖНО: Prometheus не читает config/constants.yaml — числа ниже ЗЕРКАЛЬНЫ
+# секции `alerting` и `population.alert_thresholds` этого файла. При правке
+# порога в constants.yaml нужно вручную повторить правку здесь (единый
+# источник правды для симуляции остаётся constants.yaml — этот файл лишь
+# его текущий снимок для Prometheus).
+#
+# `for:` там, где А.7/А.9 не задают длительность подтверждения явно, — это
+# инженерный запас против дребезга на одиночном шумном тике, не изменение
+# порогового значения из ТЗ.
+
+groups:
+  - name: aurwin-core
+    rules:
+      - alert: AurwinTickStalled
+        # constants.yaml: alerting.tick_stall_seconds = 120
+        expr: time() - aurwin_last_tick_timestamp_seconds > 120
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Тик-цикл sim-engine не обновлялся более 2 минут (А.7)"
+          description: "aurwin_last_tick_timestamp_seconds не обновляется > 120с — sim-engine мог упасть, зависнуть на записи в БД или потерять соединение с Postgres."
+
+      - alert: AurwinPenguinPopulationOutOfRange
+        # constants.yaml: population.alert_thresholds.penguins = {min: 10, max: 120}
+        expr: aurwin_population{species="penguin"} < 10 or aurwin_population{species="penguin"} > 120
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Численность пингвинов вне диапазона 10-120 (А.9)"
+          description: "Текущее значение: {{ $value }}. < 10 — угроза вымирания вида (7.4, реинтродукция при 0); > 120 — разбалансировка ёмкости среды (респавн рыбы, летальность охоты)."
+
+      - alert: AurwinOrcaPopulationOutOfRange
+        # constants.yaml: population.alert_thresholds.orcas = {min: 2, max: 12}
+        expr: aurwin_population{species="orca"} < 2 or aurwin_population{species="orca"} > 12
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Численность касаток вне диапазона 2-12 (А.9)"
+          description: "Текущее значение: {{ $value }}. Видоспецифичный порог (А.7) — общий порог '< 5' ложно срабатывал бы на нормальном диапазоне касаток."
+
+      - alert: AurwinLlmErrorRateHigh
+        # constants.yaml: alerting.llm_error_rate_threshold = 0.5
+        expr: (sum(rate(aurwin_llm_calls_total{status="error"}[1h])) / sum(rate(aurwin_llm_calls_total[1h]))) > 0.5
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Доля ошибок LLM-рефлексии > 50% за час (А.7)"
+          description: "Проверить доступность Anthropic API и очередь ретраев reflection-worker (7.3: деградация не должна замедлять симуляцию, но очередь рефлексий может копиться)."
+
+      - alert: AurwinLlmSpendOverBudget
+        # constants.yaml: alerting.llm_daily_cost_budget_usd = 0.40, llm_daily_cost_alert_multiplier = 2 => 0.80
+        expr: increase(aurwin_llm_cost_usd_total[24h]) > 0.80
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Расход LLM за сутки > 2х планового (~$0.40/сутки, А.9)"
+          description: "Фактический расход за последние 24ч: {{ $value | printf \"%.2f\" }} USD — ранний сигнал утечки бюджета (событийный шторм, ретраи без backoff, регрессия промпт-кэширования)."

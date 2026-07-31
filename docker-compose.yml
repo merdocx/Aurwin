@@ -8,8 +8,20 @@ services:
       POSTGRES_USER: aurwin
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: aurwin
+    # WAL-архивация (А.7, фаза 7): дополняет плановый pg_dump (ops/backup/pg_dump.sh)
+    # point-in-time recovery между дампами. wal_archive — именованный volume
+    # (не bind-mount) — WAL-файлы не должны попасть в git по ошибке.
+    command:
+      - postgres
+      - -c
+      - wal_level=replica
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_command=test ! -f /wal-archive/%f && cp %p /wal-archive/%f
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - wal_archive:/wal-archive
     # Порт наружу НЕ публикуется (CLAUDE.md / ТЗ А.7): Postgres доступен только
     # другим сервисам этого docker-compose по имени "postgres" во внутренней сети.
     expose:
@@ -20,8 +32,6 @@ services:
       timeout: 5s
       retries: 10
 
-  # Заготовки сервисов (ТЗ А.1) — фаза 1 «Каркас». Реальная логика тика,
-  # очереди рефлексий и API появится в следующих фазах.
   sim-engine:
     build:
       context: .
@@ -49,6 +59,16 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      # Фаза 6: reflection-worker подключается к Postgres напрямую (общая БД
+      # с sim-engine, А.1) — те же PG*-переменные, что и sim-engine/api-gateway
+      # (ранее отсутствовали здесь: до фазы 6 этот процесс был заглушкой без
+      # реальных обращений к БД, см. ops/DEVIATIONS.md, фаза 6).
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: aurwin
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: aurwin
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,5 +104,67 @@ services:
     depends_on:
       - api-gateway
 
+  # Не долгоживущий сервис — только для `docker compose run --rm db-maintenance
+  # <команда>` (миграции, ops/systemd/aurwin-retention.timer -> npm run
+  # maintenance:run). profiles: ["tools"] исключает его из обычного
+  # `docker compose up -d` (см. docker docs: команда run игнорирует профиль
+  # явно указанного сервиса, поэтому вызов через run работает без --profile).
+  db-maintenance:
+    build:
+      context: .
+      dockerfile: services/db/Dockerfile
+    profiles: ["tools"]
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: aurwin
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: aurwin
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # --- Наблюдаемость (ТЗ 6.1, А.7, фаза 7 «Эксплуатация») ---
+  # sim-engine (:9464) и reflection-worker (:9465) отдают /metrics во внутренней
+  # сети compose — портов наружу для них нет, только Prometheus/Grafana.
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
+    volumes:
+      - ./ops/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./ops/observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - sim-engine
+      - reflection-worker
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    volumes:
+      - ./ops/observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "127.0.0.1:9093:9093"
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./ops/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./ops/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000"
+    depends_on:
+      - prometheus
+
 volumes:
   pgdata:
+  wal_archive:
+  prometheus_data:
+  grafana_data:

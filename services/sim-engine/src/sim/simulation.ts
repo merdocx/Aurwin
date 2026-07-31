@@ -31,11 +31,14 @@ import { applyTraitDeltas, applyWeightDeltas, generateMockReflection, shouldTrig
 import { applyTrustUpdate, resolveAlarmCallsOnExpiry, resolveDisplayVigorAgainstHunt, wakeSleepersOnAlarm } from "./signalResolution.js";
 import { ticksToRealSeconds, realHoursToTicks } from "./time.js";
 import {
+  aversionKey,
+  bondKey,
   isAlive,
   type AversionRecord,
   type BondRecord,
   type Creature,
   type DecisionLogEntry,
+  type Episode,
   type Sex,
   type SignalRecord,
   type Species,
@@ -52,6 +55,35 @@ interface PendingReflection {
 
 export interface SimulationHooks {
   onWorldEvent?: (event: WorldEvent) => void;
+  /**
+   * По умолчанию true — заглушка `generateMockReflection` (sim/reflection.ts)
+   * управляет намерениями/narrative в отсутствие реального LLM (нужно
+   * `npm run simulate --fast`, см. cli/simulate.ts, для offline-прогонов
+   * баланса без БД/API-ключа). Живой продакшн-процесс (index.ts, фаза 6)
+   * передаёт false: реальный reflection-worker теперь САМ пишет эти поля
+   * прямо в Postgres (apply.ts), и если оставить заглушку включённой, её
+   * тиковый (не привязанный к реальному времени процесса reflection-worker)
+   * пересчёт периодически затирал бы в памяти intentions/narrative,
+   * применённые reflection-worker — единственный писатель этих полей в
+   * рамках одного запущенного процесса должен быть один (см.
+   * ops/DEVIATIONS.md, фаза 6).
+   */
+  mockReflectionEnabled?: boolean;
+}
+
+/**
+ * Восстановленное после рестарта состояние мира (А.7: снапшот не реже раза
+ * в минуту, восстановление при рестарте, "время после паузы НЕ догоняется").
+ * Построено persistence/restore.ts из world_clock/creatures/bonds/aversions.
+ * Episodes/perceivedStates/trust/actionCounts не персистентны (см.
+ * ops/DEVIATIONS.md, фаза 7) — сознательный пробел, не растягиваемый на
+ * потерю ≤ 1 минуты жизни мира.
+ */
+export interface RestoredWorldState {
+  tick: number;
+  creatures: Creature[];
+  bonds: BondRecord[];
+  aversions: AversionRecord[];
 }
 
 /** Метрики, накапливаемые по ходу симуляции — потребляются CLI-отчётом (task 12/13). */
@@ -104,6 +136,18 @@ export class Simulation {
   private spatialIndex = new SpatialGrid<IndexedPoint>(WITNESS_QUERY_CELL_SIZE);
   private pendingReflections: PendingReflection[] = [];
   private pendingSignals: SignalRecord[] = [];
+  /**
+   * Эпизоды, созданные с последнего drainNewEpisodes() (фаза 6): index.ts
+   * персистит их в таблицу `episodes` тем же приёмом, что и pendingEvents/
+   * pendingDeaths (буфер очищается при каждом успешном флаше). Это закрывает
+   * пробел, обнаруженный при реализации reflection-worker — без записи
+   * `episodes` в Postgres событийная рефлексия не могла бы найти свои
+   * триггеры ни в одном реально работающем процессе (см. ops/DEVIATIONS.md,
+   * фаза 6). `zone` эпизода намеренно НЕ идёт в БД — А.2 не содержит эту
+   * колонку в схеме `episodes` (zone — внутреннее расширение sim-engine для
+   * memory.ts, дублирующая информация уже есть в habits существа).
+   */
+  private episodesThisTick: Episode[] = [];
   private recentPredation: Array<{ zone: ZoneName; tick: number }> = [];
   private observedCohort = new Set<string>();
   private eventWindowUntil = new Map<string, number>();
@@ -111,12 +155,20 @@ export class Simulation {
   private readonly decisionLogCap = 20_000;
   private readonly worldEventsCap = 5_000;
 
-  constructor(seed: number, hooks: SimulationHooks = {}) {
+  constructor(seed: number, hooks: SimulationHooks = {}, restore?: RestoredWorldState) {
     this.rng = new Rng(seed);
     this.world = new World();
     this.hooks = hooks;
-    const population = createGenesisPopulation(0, this.rng, this.nameGen, this.nextId);
-    for (const creature of population) this.creatures.set(creature.id, creature);
+    if (restore) {
+      this.tick_ = restore.tick;
+      this.world.fastForwardTo(restore.tick);
+      for (const creature of restore.creatures) this.creatures.set(creature.id, creature);
+      for (const bond of restore.bonds) this.bonds.set(bondKey(bond.creatureA, bond.creatureB), bond);
+      for (const aversion of restore.aversions) this.aversions.set(aversionKey(aversion.subjectId, aversion.objectId), aversion);
+    } else {
+      const population = createGenesisPopulation(0, this.rng, this.nameGen, this.nextId);
+      for (const creature of population) this.creatures.set(creature.id, creature);
+    }
     this.rotateObservedCohort();
   }
 
@@ -137,6 +189,13 @@ export class Simulation {
 
   aliveCreatures(): Creature[] {
     return [...this.creatures.values()].filter(isAlive);
+  }
+
+  /** Забирает и очищает буфер новых эпизодов (фаза 6, index.ts::persistTick). */
+  drainNewEpisodes(): Episode[] {
+    const batch = this.episodesThisTick;
+    this.episodesThisTick = [];
+    return batch;
   }
 
   private emitWorldEvent(event: Omit<WorldEvent, "id">): void {
@@ -286,7 +345,9 @@ export class Simulation {
       if (newStage !== creature.ageStage) {
         const type = newStage === "adult" ? "matured" : "grew_old";
         creature.ageStage = newStage;
-        recordEpisode(creature, this.tick_, { type, participants: [creature.id], significance: getSimConstants().episode_significance[type] }, this.nextId);
+        this.episodesThisTick.push(
+          recordEpisode(creature, this.tick_, { type, participants: [creature.id], significance: getSimConstants().episode_significance[type] }, this.nextId),
+        );
         this.emitWorldEvent({ tick: this.tick_, type, actorId: creature.id, zone: creature.zone, payload: {} });
         this.markEventWindow(creature.id);
       }
@@ -448,7 +509,9 @@ export class Simulation {
           this.emitWorldEvent({ tick: this.tick_, type: "signal_sent", actorId: creature.id, zone: creature.zone, payload: { signalType: "alarm_call" } });
           const woken = wakeSleepersOnAlarm(creature, audience, this.rng);
           for (const w of woken) {
-            recordEpisode(w, this.tick_, { type: "woken_by_alarm", participants: [creature.id], significance: getSimConstants().episode_significance.woken_by_alarm, zone: creature.zone }, this.nextId);
+            this.episodesThisTick.push(
+              recordEpisode(w, this.tick_, { type: "woken_by_alarm", participants: [creature.id], significance: getSimConstants().episode_significance.woken_by_alarm, zone: creature.zone }, this.nextId),
+            );
             this.emitWorldEvent({ tick: this.tick_, type: "woken_by_alarm", actorId: creature.id, targetId: w.id, zone: creature.zone, payload: {} });
           }
           break;
@@ -531,13 +594,17 @@ export class Simulation {
         }
         this.acc.coordinatedHunts += 1;
       }
-      recordEpisode(orca, this.tick_, { type: "hunt_success", participants: [prey.id], significance: getSimConstants().episode_significance.hunt_success, zone: prey.zone }, this.nextId);
+      this.episodesThisTick.push(
+        recordEpisode(orca, this.tick_, { type: "hunt_success", participants: [prey.id], significance: getSimConstants().episode_significance.hunt_success, zone: prey.zone }, this.nextId),
+      );
       tickOutcomes.push({ creatureId: orca.id, zone: prey.zone, score: 1 });
       this.killCreature(prey, "predation");
       if (guarded) this.acc.guardEpisodes += 1;
     } else {
       tickOutcomes.push({ creatureId: orca.id, zone: prey.zone, score: -0.3 });
-      recordEpisode(orca, this.tick_, { type: "hunt_attempt_failed_by_hunter", participants: [prey.id], significance: getSimConstants().episode_significance.hunt_attempt_failed_by_hunter, zone: prey.zone }, this.nextId);
+      this.episodesThisTick.push(
+        recordEpisode(orca, this.tick_, { type: "hunt_attempt_failed_by_hunter", participants: [prey.id], significance: getSimConstants().episode_significance.hunt_attempt_failed_by_hunter, zone: prey.zone }, this.nextId),
+      );
 
       tickSkillGrowth.push({ creatureId: prey.id, skill: "evasion" });
       tickOutcomes.push({ creatureId: prey.id, zone: prey.zone, score: -1 });
@@ -548,9 +615,11 @@ export class Simulation {
         { type: "hunt_attempt_survived_by_prey", participants: [orca.id], significance: getSimConstants().episode_significance.hunt_attempt_survived_by_prey, zone: prey.zone },
         this.nextId,
       );
+      this.episodesThisTick.push(preyEpisode);
       this.markEventWindow(prey.id);
       const { witnesses, friends } = this.witnessesAndFriendsOf(prey, visiblePrey);
       const propagated = propagateSocialLearning(prey, preyEpisode, witnesses, friends, this.tick_, this.nextId);
+      this.episodesThisTick.push(...propagated);
       this.acc.totalEpisodesCreated += propagated.length + 1;
       for (const ep of propagated) if (ep.transmissionDepth >= 2) this.acc.transmissionDepth2Plus += 1;
     }
@@ -561,7 +630,16 @@ export class Simulation {
     creature.diedAtTick = this.tick_;
     creature.deathCause = cause;
     this.acc.deaths[creature.species][cause] = (this.acc.deaths[creature.species][cause] ?? 0) + 1;
-    this.emitWorldEvent({ tick: this.tick_, type: "death", actorId: creature.id, zone: creature.zone, payload: { cause } });
+    // species/bornAtTick в payload — не для наблюдателя (тому хватает cause), а для
+    // метрики продолжительности жизни (6.1, А.7/фаза 7): index.ts считает возраст
+    // на момент смерти из этого события, не запрашивая creatures отдельно.
+    this.emitWorldEvent({
+      tick: this.tick_,
+      type: "death",
+      actorId: creature.id,
+      zone: creature.zone,
+      payload: { cause, species: creature.species, bornAtTick: creature.bornAtTick },
+    });
 
     const nearby = this.spatialIndex
       .queryRadius(creature.pos.x, creature.pos.y, getSimConstants().day_night.perception_radius[creature.species].day, creature.id)
@@ -584,6 +662,7 @@ export class Simulation {
       };
       // Источник переиспользует authority умершего (снимок на момент смерти).
       const propagated = propagateSocialLearning({ ...creature, authority: creature.authority }, virtualEpisode, witnesses, friends, this.tick_, this.nextId);
+      this.episodesThisTick.push(...propagated);
       this.acc.totalEpisodesCreated += propagated.length;
       for (const ep of propagated) if (ep.transmissionDepth >= 2) this.acc.transmissionDepth2Plus += 1;
     }
@@ -665,7 +744,9 @@ export class Simulation {
       this.acc.births[offspring.species] += 1;
 
       for (const parent of [a, b]) {
-        recordEpisode(parent, this.tick_, { type: "birth", participants: [offspring.id], significance: constants.episode_significance.birth, zone: parent.zone }, this.nextId);
+        this.episodesThisTick.push(
+          recordEpisode(parent, this.tick_, { type: "birth", participants: [offspring.id], significance: constants.episode_significance.birth, zone: parent.zone }, this.nextId),
+        );
       }
       this.emitWorldEvent({ tick: this.tick_, type: "birth", actorId: offspring.id, zone: offspring.zone, payload: { parentA: a.id, parentB: b.id } });
       this.markEventWindow(offspring.id);
@@ -674,6 +755,7 @@ export class Simulation {
 
   // ---- шаг 8 ----
   private enqueueReflectionsStep(decisions: Map<string, Decision>): void {
+    if (this.hooks.mockReflectionEnabled === false) return;
     for (const [creatureId, decision] of decisions) {
       if (decision.action !== "sleep") continue;
       const creature = this.creatures.get(creatureId);
@@ -717,7 +799,8 @@ export class Simulation {
         touched.add(key);
         if (before < getSimConstants().social.friendship.threshold && record.strength >= getSimConstants().social.friendship.threshold) {
           this.emitWorldEvent({ tick: this.tick_, type: "bond_formed", actorId: creature.id, targetId: other.id, zone: creature.zone, payload: {} });
-          transmitOnBondFormed(creature, other, this.tick_, this.nextId);
+          const transmitted = transmitOnBondFormed(creature, other, this.tick_, this.nextId);
+          if (transmitted) this.episodesThisTick.push(transmitted);
         }
       }
     }

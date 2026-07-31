@@ -1,0 +1,212 @@
+{
+  "title": "Aurwin — эксплуатация (6.1, А.7)",
+  "uid": "aurwin-ops",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "timezone": "browser",
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "15s",
+  "tags": ["aurwin"],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Население по видам",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "aurwin_population", "legendFormat": "{{species}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Отставание тик-цикла (А.7: алёрт > 120с)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "time() - aurwin_last_tick_timestamp_seconds", "legendFormat": "lag" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Рождения (в час)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "rate(aurwin_births_total[1h]) * 3600", "legendFormat": "{{species}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Смерти по причинам (в час)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "rate(aurwin_deaths_total[1h]) * 3600", "legendFormat": "{{species}}/{{cause}}" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Продолжительность жизни, медиана (внутр. недели)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.5, sum(rate(aurwin_lifespan_weeks_bucket[6h])) by (le, species))", "legendFormat": "{{species}} p50" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Ночные смерти от хищника (в сутки, 7.10)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "increase(aurwin_night_predation_deaths_total[24h])", "legendFormat": "ночные смерти/сутки" }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Поведенческая дивергенция когорт (7.7, цель 7)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "max": 1, "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "aurwin_behavioral_divergence", "legendFormat": "{{species}}" }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Среднее значение навыков по виду (7.7)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "max": 0.9, "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "aurwin_skill_mean", "legendFormat": "{{species}}/{{skill}}" }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Стандартное отклонение навыков (проверка вырождения специализации, 6.1)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 32, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "aurwin_skill_stddev", "legendFormat": "{{species}}/{{skill}}" }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Сигналы: поданные (в час, 7.8)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 32, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "rate(aurwin_signals_sent_total[1h]) * 3600", "legendFormat": "{{signal_type}}" }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Сигналы: доля опровергнутых (постфактум ложных, 7.8)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 40, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "aurwin_signals_disconfirmed_total / aurwin_signals_sent_total", "legendFormat": "{{signal_type}}" }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Доверие (avg) и w_vigor касаток (7.8.3, 7.8.4)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 40, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "aurwin_trust_avg", "legendFormat": "trust_avg" },
+        { "refId": "B", "expr": "aurwin_orca_w_vigor_avg", "legendFormat": "orca_w_vigor_avg" }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Традиции: доля эпизодов transmission_depth >= 2 (7.7, механизм 5)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 48, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "aurwin_transmission_depth2plus_ratio", "legendFormat": "depth>=2 ratio" }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "Доля спящих по фазе суток (7.10)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 48, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "aurwin_sleeping_ratio", "legendFormat": "{{species}}/{{phase}}" }
+      ]
+    },
+    {
+      "id": 15,
+      "title": "Среднее давление сна (7.10)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 56, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "aurwin_sleep_pressure_avg", "legendFormat": "{{species}}" }
+      ]
+    },
+    {
+      "id": 16,
+      "title": "LLM: вызовы по исходу (в час, А.7: ошибки > 50%/час)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 56, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "rate(aurwin_llm_calls_total[1h]) * 3600", "legendFormat": "{{type}}/{{model}}/{{status}}" }
+      ]
+    },
+    {
+      "id": 17,
+      "title": "LLM: расход за сутки, USD (А.9: план ~$0.40, алёрт > $0.80)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 64, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "increase(aurwin_llm_cost_usd_total[24h])", "legendFormat": "{{type}}/{{model}}" }
+      ]
+    },
+    {
+      "id": 18,
+      "title": "LLM: латентность p95, сек",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 64, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum(rate(aurwin_llm_latency_seconds_bucket[1h])) by (le, type, model))", "legendFormat": "{{type}}/{{model}} p95" }
+      ]
+    }
+  ]
+}

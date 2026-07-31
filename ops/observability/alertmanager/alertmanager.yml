@@ -1,0 +1,20 @@
+# Alertmanager (ТЗ А.7, фаза 7 «Эксплуатация»).
+#
+# MVP не предполагает внешний канал уведомлений (нет Slack/email-креденшелов
+# в скоупе фазы 7 — ops/DEVIATIONS.md) — receiver "team-log" ничего никуда не
+# шлёт, но алёрты остаются видимы и проверяемы через:
+#   - Alertmanager UI/API: http://127.0.0.1:9093/api/v2/alerts
+#   - Prometheus UI/API:   http://127.0.0.1:9090/alerts
+# Это достаточно для гейта фазы 7 ("алёрт срабатывает"). Добавление
+# webhook/email/Slack-получателя — вопрос будущей эксплуатации, не требует
+# изменения правил алёртов (rule_files), только секции receivers ниже.
+
+route:
+  receiver: team-log
+  group_by: ["alertname", "species"]
+  group_wait: 10s
+  group_interval: 1m
+  repeat_interval: 4h
+
+receivers:
+  - name: team-log

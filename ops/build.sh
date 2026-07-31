@@ -11,7 +11,8 @@ for phase in $(seq "$START" 7); do
   case $phase in
     4) TURNS=500 ;;
     5) TURNS=400 ;;
-    6) TURNS=250 ;;
+    6) TURNS=400 ;;
+    7) TURNS=300 ;;
     *) TURNS=150 ;;
   esac
   echo "=== Фаза $phase — старт $(date '+%F %T'), лимит ходов $TURNS ==="
