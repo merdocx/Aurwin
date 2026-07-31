@@ -11,14 +11,24 @@ services:
     # WAL-архивация (А.7, фаза 7): дополняет плановый pg_dump (ops/backup/pg_dump.sh)
     # point-in-time recovery между дампами. wal_archive — именованный volume
     # (не bind-mount) — WAL-файлы не должны попасть в git по ошибке.
+    #
+    # Docker создаёт новый именованный volume с владельцем root:root — процесс
+    # archiver сервера Postgres работает от uid postgres (70), поэтому без
+    # chown ниже archive_command молча (для sim-engine/наблюдателя) падает на
+    # каждом сегменте с "Permission denied" (обнаружено живым прогоном WAL-
+    # архивации в этой фазе, см. ops/DEVIATIONS.md). command переопределён на
+    # shell-обёртку: chown выполняется, пока entrypoint ещё root, затем
+    # управление передаётся штатному docker-entrypoint.sh postgres (тот сам
+    # опускает привилегии до postgres через gosu, как и раньше).
     command:
-      - postgres
+      - sh
       - -c
-      - wal_level=replica
-      - -c
-      - archive_mode=on
-      - -c
-      - archive_command=test ! -f /wal-archive/%f && cp %p /wal-archive/%f
+      - >-
+        chown postgres:postgres /wal-archive &&
+        exec docker-entrypoint.sh postgres
+        -c wal_level=replica
+        -c archive_mode=on
+        -c 'archive_command=test ! -f /wal-archive/%f && cp %p /wal-archive/%f'
     volumes:
       - pgdata:/var/lib/postgresql/data
       - wal_archive:/wal-archive

@@ -1,0 +1,131 @@
+# promtool-тест правил алёртов (ops/observability/prometheus/alerts.yml).
+#
+# Гейт фазы 7: "алёрт срабатывает на искусственно заниженной популяции" —
+# проверяется здесь синтетическими временными рядами (`input_series`), а не
+# правкой реальной популяции живого мира (CLAUDE.md, «Незыблемые правила»,
+# п.6: данные мира — ценность, трогать боевую БД ради теста алёрта не нужно
+# и не следует). Запуск:
+#
+#   docker compose exec -T prometheus \
+#     promtool test rules /etc/prometheus/alerts_test.yml
+#
+# (файл монтируется в контейнер prometheus рядом с alerts.yml, см.
+# docker-compose.yml). Все 4 правила алёртов А.7 покрыты хотя бы одним
+# срабатывающим и одним НЕ срабатывающим сценарием.
+
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # --- Численность пингвинов вне диапазона 10-120 (искусственно занижена) ---
+  - interval: 1m
+    input_series:
+      - series: 'aurwin_population{species="penguin"}'
+        values: "5x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AurwinPenguinPopulationOutOfRange
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              species: penguin
+            exp_annotations:
+              summary: "Численность пингвинов вне диапазона 10-120 (А.9)"
+              description: "Текущее значение: 5. < 10 — угроза вымирания вида (7.4, реинтродукция при 0); > 120 — разбалансировка ёмкости среды (респавн рыбы, летальность охоты)."
+
+  # --- Пингвины в норме — алёрт НЕ должен срабатывать ---
+  - interval: 1m
+    input_series:
+      - series: 'aurwin_population{species="penguin"}'
+        values: "60x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AurwinPenguinPopulationOutOfRange
+        exp_alerts: []
+
+  # --- Численность касаток вне диапазона 2-12 (искусственно занижена) ---
+  - interval: 1m
+    input_series:
+      - series: 'aurwin_population{species="orca"}'
+        values: "1x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AurwinOrcaPopulationOutOfRange
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              species: orca
+            exp_annotations:
+              summary: "Численность касаток вне диапазона 2-12 (А.9)"
+              description: "Текущее значение: 1. Видоспецифичный порог (А.7) — общий порог '< 5' ложно срабатывал бы на нормальном диапазоне касаток."
+
+  # --- Остановка тик-цикла > 2 минут: метка последнего тика не обновляется ---
+  - interval: 1m
+    input_series:
+      - series: "aurwin_last_tick_timestamp_seconds"
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AurwinTickStalled
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Тик-цикл sim-engine не обновлялся более 2 минут (А.7)"
+              description: "aurwin_last_tick_timestamp_seconds не обновляется > 120с — sim-engine мог упасть, зависнуть на записи в БД или потерять соединение с Postgres."
+
+  # --- Тик обновляется штатно (каждую минуту "сейчас") — алёрт НЕ должен срабатывать ---
+  - interval: 1m
+    input_series:
+      - series: "aurwin_last_tick_timestamp_seconds"
+        values: "0+60x10"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AurwinTickStalled
+        exp_alerts: []
+
+  # --- Доля ошибок LLM > 50% за час ---
+  - interval: 1m
+    input_series:
+      - series: 'aurwin_llm_calls_total{status="error"}'
+        values: "0+6x70"
+      - series: 'aurwin_llm_calls_total{status="ok"}'
+        values: "0+1x70"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: AurwinLlmErrorRateHigh
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Доля ошибок LLM-рефлексии > 50% за час (А.7)"
+              description: "Проверить доступность Anthropic API и очередь ретраев reflection-worker (7.3: деградация не должна замедлять симуляцию, но очередь рефлексий может копиться)."
+
+  # --- Расход LLM за сутки > 2х планового ($0.40 -> алёрт при > $0.80) ---
+  - interval: 10m
+    input_series:
+      - series: 'aurwin_llm_cost_usd_total{type="background",model="claude-haiku-4-5-20251001"}'
+        values: "0+0.1x144"
+    alert_rule_test:
+      - eval_time: 24h
+        alertname: AurwinLlmSpendOverBudget
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              type: background
+              model: claude-haiku-4-5-20251001
+            exp_annotations:
+              summary: "Расход LLM за сутки > 2х планового (~$0.40/сутки, А.9)"
+              description: "Фактический расход за последние 24ч: 14.40 USD — ранний сигнал утечки бюджета (событийный шторм, ретраи без backoff, регрессия промпт-кэширования)."
+
+  # --- Расход в пределах плана — алёрт НЕ должен срабатывать ---
+  - interval: 10m
+    input_series:
+      - series: 'aurwin_llm_cost_usd_total{type="background",model="claude-haiku-4-5-20251001"}'
+        values: "0+0.001x144"
+    alert_rule_test:
+      - eval_time: 24h
+        alertname: AurwinLlmSpendOverBudget
+        exp_alerts: []

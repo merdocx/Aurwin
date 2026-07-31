@@ -8,5 +8,12 @@ import { Pool } from "pg";
  */
 export function createPool(): Pool {
   const connectionString = process.env.DATABASE_URL;
-  return connectionString ? new Pool({ connectionString }) : new Pool();
+  const pool = connectionString ? new Pool({ connectionString }) : new Pool();
+  // См. тот же фикс/обоснование в services/sim-engine/src/persistence/pool.ts
+  // (фаза 7): без слушателя "error" разрыв простаивающего соединения валит
+  // процесс необработанным событием, а не только текущий запрос.
+  pool.on("error", (err) => {
+    console.error("[db] ошибка простаивающего соединения с Postgres (пул восстановится сам):", err.message);
+  });
+  return pool;
 }

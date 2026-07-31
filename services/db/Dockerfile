@@ -10,6 +10,11 @@ COPY services/db/package.json ./services/db/package.json
 RUN npm install --workspace=@aurwin/db --include-workspace-root
 
 COPY services/db ./services/db
+# constants.ts (maintenance/pruneEpisodes.ts и др.) читает config/constants.yaml
+# по абсолютному пути от корня workdir (CLAUDE.md п.3: единый источник правды,
+# без хардкода чисел) — без этой строки retention падает ENOENT при каждом
+# плановом прогоне (обнаружено живым прогоном ops/retention/run.sh в фазе 7).
+COPY config ./config
 
 WORKDIR /app/services/db
 # Без CMD-значения по умолчанию, кроме no-op: этот сервис не является
