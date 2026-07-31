@@ -8,5 +8,10 @@ export default defineConfig({
   server: {
     host: true,
     port: 5173,
+    // Vite 5.4+/6 отклоняет запросы с чужим заголовком Host по умолчанию
+    // (защита от DNS rebinding) — без явного разрешения домен за
+    // reverse-прокси (ops/caddy/Caddyfile) получал бы "Blocked request.
+    // This host is not allowed".
+    allowedHosts: ["aurwin.ru"],
   },
 });

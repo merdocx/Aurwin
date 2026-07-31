@@ -14,6 +14,20 @@ export class FakeAnthropicTransport implements AnthropicTransport {
   messageCalls: string[] = [];
   lastBatchItems: BatchItem[] = [];
   batchCallCount = 0;
+  /**
+   * Если задано — pollBatch возвращает ОШИБКУ НА УРОВНЕ ЭЛЕМЕНТА batch
+   * (succeeded: false) для элементов, чей userContent удовлетворяет
+   * предикату (имитация rate_limit/overloaded/expired у Anthropic Batch API
+   * для ОДНОГО элемента при том, что batch в целом успешен — в отличие от
+   * `down`, который валит ВЕСЬ вызов). Предикат по содержимому запроса (а не
+   * по reflections.id) — id рефлексии ещё не известен ДО первого runPass()
+   * (создаётся queue.ts во время его выполнения), а по имени существа,
+   * попавшему в payload, отследить нужный элемент можно ДО того, как он
+   * впервые пройдёт через batch. Нужно для регрессии дефекта приёмки фазы 7:
+   * такие ошибки раньше НАВСЕГДА помечали reflections как 'failed' без
+   * единой попытки повтора (см. worker.ts, ops/DEVIATIONS.md).
+   */
+  failingContentMatch: ((userContent: string) => boolean) | undefined = undefined;
 
   constructor(private respond: (userContent: string) => string) {}
 
@@ -32,13 +46,18 @@ export class FakeAnthropicTransport implements AnthropicTransport {
 
   async pollBatch(_batchId: string, _timeoutMs: number, _pollIntervalMs: number): Promise<BatchResultItem[]> {
     if (this.down) throw new Error("[fake] симулированная сетевая недоступность Anthropic API (batch poll)");
-    return this.lastBatchItems.map((item) => ({
-      customId: item.customId,
-      succeeded: true,
-      text: this.respond(item.userContent),
-      inputTokens: 500,
-      outputTokens: 200,
-    }));
+    return this.lastBatchItems.map((item) => {
+      if (this.failingContentMatch?.(item.userContent)) {
+        return { customId: item.customId, succeeded: false, errorMessage: "[fake] симулированная ошибка ОДНОГО элемента batch (rate_limit)" };
+      }
+      return {
+        customId: item.customId,
+        succeeded: true,
+        text: this.respond(item.userContent),
+        inputTokens: 500,
+        outputTokens: 200,
+      };
+    });
   }
 }
 

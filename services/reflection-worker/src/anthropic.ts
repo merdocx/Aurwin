@@ -4,13 +4,39 @@ import type { ReflectionKind } from "./types.js";
 
 const ANTHROPIC_API_BASE = "https://api.anthropic.com/v1";
 const ANTHROPIC_VERSION = "2023-06-01";
-/** Ответ рефлексии ограничен ~150 слов narrative + короткие структурные поля (7.6: "выход ≈ 450 токенов"). */
-const MAX_OUTPUT_TOKENS = 1024;
+/**
+ * Ответ рефлексии ограничен ~150 слов narrative + короткие структурные поля
+ * (7.6: "выход ≈ 450 токенов") — НО это ориентир для типичного случая, не
+ * жёсткий потолок: живой боевой прогон (приёмка фазы 7) показал, что при
+ * 1024 токенах ~37% рефлексий проваливали валидацию, и почти ВСЕ провалы
+ * оказались синтаксически незакрытым JSON, обрубленным на произвольном
+ * символе — то есть моделью, упёршейся в max_tokens ДО того, как она успела
+ * закрыть объект, а не невалидным по смыслу ответом. Корреляция с числом
+ * слитых эпизодов в одном вызове (`new_episodes`, дебаунс 7.3 может слить
+ * "все события" затяжного эпизода вроде разорения колонии — до 36 штук в
+ * одном вызове на боевом прогоне) была явной, но даже вызовы БЕЗ новых
+ * эпизодов (переписывание narrative + фактов + намерений с нуля) иногда
+ * упирались в лимит — риск был системным, а не только для "многословных"
+ * случаев. Anthropic биллит по РЕАЛЬНО сгенерированным токенам, а не по
+ * значению потолка (см. `estimateCostUsd` ниже — использует `usage.
+ * output_tokens` из ответа), поэтому щедрый запас здесь не увеличивает
+ * стоимость типичного вызова ни на цент — расширяет только страховку от
+ * обрезания. См. ops/DEVIATIONS.md.
+ */
+const MAX_OUTPUT_TOKENS = 4096;
 
 export interface MessageCallResult {
   text: string;
   inputTokens: number;
   outputTokens: number;
+  /**
+   * `stop_reason` из ответа Anthropic (`"end_turn"`, `"max_tokens"`, ...) —
+   * без него отличить обрезание по лимиту токенов от иной причины короткого/
+   * невалидного ответа можно было только вручную считая байты обрубленного
+   * JSON (именно так и был диагностирован дефект приёмки фазы 7, см.
+   * ops/DEVIATIONS.md) — теперь это видно сразу в логе/`reflections.response`.
+   */
+  stopReason?: string;
 }
 
 export interface BatchItem {
@@ -25,6 +51,8 @@ export interface BatchResultItem {
   inputTokens?: number;
   outputTokens?: number;
   errorMessage?: string;
+  /** См. MessageCallResult.stopReason — то же самое поле, для batch-ветки. */
+  stopReason?: string;
 }
 
 /**
@@ -91,9 +119,10 @@ export class HttpAnthropicTransport implements AnthropicTransport {
     const json = (await response.json()) as {
       content: Array<{ type: string; text?: string }>;
       usage: { input_tokens: number; output_tokens: number };
+      stop_reason?: string;
     };
     const text = json.content.find((b) => b.type === "text")?.text ?? "";
-    return { text, inputTokens: json.usage.input_tokens, outputTokens: json.usage.output_tokens };
+    return { text, inputTokens: json.usage.input_tokens, outputTokens: json.usage.output_tokens, stopReason: json.stop_reason };
   }
 
   async createBatch(model: string, items: BatchItem[]): Promise<string> {
@@ -147,7 +176,15 @@ export class HttpAnthropicTransport implements AnthropicTransport {
       .map((line) => {
         const row = JSON.parse(line) as {
           custom_id: string;
-          result: { type: string; message?: { content: Array<{ type: string; text?: string }>; usage: { input_tokens: number; output_tokens: number } }; error?: { message?: string } };
+          result: {
+            type: string;
+            message?: {
+              content: Array<{ type: string; text?: string }>;
+              usage: { input_tokens: number; output_tokens: number };
+              stop_reason?: string;
+            };
+            error?: { message?: string };
+          };
         };
         if (row.result.type === "succeeded" && row.result.message) {
           const text = row.result.message.content.find((b) => b.type === "text")?.text ?? "";
@@ -157,6 +194,7 @@ export class HttpAnthropicTransport implements AnthropicTransport {
             text,
             inputTokens: row.result.message.usage.input_tokens,
             outputTokens: row.result.message.usage.output_tokens,
+            stopReason: row.result.message.stop_reason,
           };
         }
         return { customId: row.custom_id, succeeded: false, errorMessage: row.result.error?.message ?? row.result.type };

@@ -253,10 +253,10 @@ export async function markReflectionSent(pool: Pool, id: string, response: unkno
  * что именно ответила модель, и разобрать причину систематических отказов
  * валидации (диагностика фазы 6) стало бы невозможно.
  */
-export async function markReflectionFailed(pool: Pool, id: string, rawResponse?: string): Promise<void> {
+export async function markReflectionFailed(pool: Pool, id: string, rawResponse?: string, stopReason?: string): Promise<void> {
   await pool.query(`UPDATE reflections SET status = 'failed', response = $2 WHERE id = $1`, [
     id,
-    rawResponse !== undefined ? JSON.stringify({ raw: rawResponse }) : null,
+    rawResponse !== undefined ? JSON.stringify({ raw: rawResponse, ...(stopReason ? { stop_reason: stopReason } : {}) }) : null,
   ]);
 }
 

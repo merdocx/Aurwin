@@ -20,13 +20,14 @@ import {
   insertEpisodes,
   insertWorldEvents,
   notifyTick,
+  persistGenesis,
   syncAversions,
   syncBonds,
   updateWorldClock,
   upsertCreatures,
   type DeathRecord,
 } from "./persistence/persist.js";
-import { loadWorldState } from "./persistence/restore.js";
+import { hasAnyCreatureRecord, loadWorldState } from "./persistence/restore.js";
 import { recordWorldEvent, setPopulationGauges, startMetricsServer } from "./metrics.js";
 
 console.log("[sim-engine] запуск тик-цикла мира (фаза 7 «Эксплуатация»)");
@@ -43,6 +44,21 @@ let pendingDeaths: DeathRecord[] = [];
 // "Время после паузы НЕ догоняется" — tick_ просто резюмируется с того же
 // значения, без попытки наверстать пропущенный интервал реального времени.
 const restored = await loadWorldState(pool);
+
+if (!restored && (await hasAnyCreatureRecord(pool))) {
+  // Защита от повторного genesis (см. persistence/restore.ts::hasAnyCreatureRecord
+  // и persistence/persist.ts::persistGenesis): world_clock пуст, но creatures
+  // уже содержит записи — это НЕ штатный холодный старт. Запуск genesis здесь
+  // повторил бы дефект приёмки (40->80 пингвинов, 4->8 касаток). Мир не
+  // перезапускается и история не стирается (7.4 ТЗ) — вместо тихого действия
+  // процесс останавливается и требует ручного разбора (ops/DEVIATIONS.md).
+  console.error(
+    "[sim-engine] КРИТИЧНО: world_clock пуст, но creatures уже содержит записи — отказ от повторного genesis. " +
+      "Разберитесь вручную (см. ops/DEVIATIONS.md, фаза 7) и не удаляйте существующие данные без явного решения.",
+  );
+  await pool.end();
+  process.exit(1);
+}
 
 const sim = new Simulation(
   seed,
@@ -70,6 +86,12 @@ if (restored) {
   console.log(`[sim-engine] мир восстановлен из снапшота: тик ${restored.tick}, ${restored.creatures.length} живых существ`);
 } else {
   console.log(`[sim-engine] мир не найден в БД — genesis-запуск`);
+  // Атомарная запись genesis-популяции + world_clock ОДНОЙ транзакцией (см.
+  // persistGenesis) — устраняет само окно, в котором creatures успевают
+  // попасть в БД без world_clock при крахе процесса между двумя раздельными
+  // await (ровно причина дефекта двойного genesis при приёмке).
+  await persistGenesis(pool, sim.aliveCreatures(), sim.currentTick, sim.world.dayNight.phase());
+  console.log(`[sim-engine] genesis записан атомарно: тик ${sim.currentTick}, ${sim.aliveCreatures().length} существ`);
 }
 
 startMetricsServer(sim);

@@ -18,6 +18,24 @@ import type { RestoredWorldState } from "../sim/simulation.js";
  * потребности, self-narrative, позиция) восстанавливается полностью — это
  * то, что определяет идентичность и историю особи для наблюдателя.
  */
+/**
+ * Защита от повторного genesis (см. persistGenesis в persist.ts): world_clock
+ * пустой ДОЛЖЕН означать "мира ещё не было вообще", а не "world_clock отстал
+ * от creatures". Раньше единственным критерием холодного старта был пустой
+ * world_clock — этого было достаточно только при условии, что creatures и
+ * world_clock всегда пишутся вместе; persistGenesis это теперь гарантирует
+ * транзакцией, но index.ts всё равно сверяется с этой функцией как со вторым,
+ * независимым сигналом (defense in depth) — если она когда-либо вернёт true
+ * при пустом world_clock, это укажет на состояние, повреждённое НЕ через
+ * штатный путь persistGenesis (например, ручную правку БД), и genesis
+ * запускать нельзя ни в коем случае (правило "genesis ровно один раз за всю
+ * жизнь мира").
+ */
+export async function hasAnyCreatureRecord(pool: Pool): Promise<boolean> {
+  const result = await pool.query(`SELECT 1 FROM creatures LIMIT 1`);
+  return (result.rowCount ?? 0) > 0;
+}
+
 export async function loadWorldState(pool: Pool): Promise<RestoredWorldState & { phase: "day" | "night" } | null> {
   const clockResult = await pool.query<{ tick: string; phase: "day" | "night" }>(
     `SELECT tick, phase FROM world_clock WHERE id = 1`,

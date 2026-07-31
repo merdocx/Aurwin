@@ -71,20 +71,29 @@ export class ReflectionWorker {
     return this.backoff.get(reflectionId)?.attempts ?? 0;
   }
 
-  private async validateAgainstRow(row: QueuedReflectionRow, text: string): Promise<ValidatedReflection | undefined> {
+  private async validateAgainstRow(row: QueuedReflectionRow, text: string, stopReason?: string): Promise<ValidatedReflection | undefined> {
     const nameToId = await rebuildNameToId(this.pool, row.creature_id);
     const knownZones = new Set(Object.keys(getConstants().world.zones));
     const result = validateReflectionResponse(text, { nameToId, knownZones });
     if (!result.ok) {
       // Диагностика (не блокирует пайплайн, только видимость причин отказа
       // валидации — А.7 требует отслеживать долю ошибок LLM, а без деталей
-      // "невалидный ответ" неотличим от сетевого сбоя в логах).
-      console.warn(`[reflection-worker] невалидный ответ LLM для ${row.creature_id} (${row.kind}): ${result.errors.join("; ")}`);
+      // "невалидный ответ" неотличим от сетевого сбоя в логах). stopReason
+      // отдельно помечен: "max_tokens" — это ответ, ОБРЕЗАННЫЙ лимитом
+      // токенов (см. anthropic.ts::MAX_OUTPUT_TOKENS), а не смысловая ошибка
+      // модели — при приёмке фазы 7 это оказалось причиной подавляющего
+      // большинства провалов валидации (см. ops/DEVIATIONS.md).
+      const stopNote = stopReason ? ` [stop_reason=${stopReason}]` : "";
+      console.warn(`[reflection-worker] невалидный ответ LLM для ${row.creature_id} (${row.kind})${stopNote}: ${result.errors.join("; ")}`);
     }
     return result.ok ? result.value : undefined;
   }
 
-  private async attemptCall(model: string, kind: "event" | "background", userContent: string): Promise<{ ok: true; text: string } | { ok: false }> {
+  private async attemptCall(
+    model: string,
+    kind: "event" | "background",
+    userContent: string,
+  ): Promise<{ ok: true; text: string; stopReason?: string } | { ok: false }> {
     const start = this.clock();
     try {
       const result = await this.transport.createMessage(model, userContent);
@@ -95,7 +104,7 @@ export class ReflectionWorker {
         latencySeconds: (this.clock() - start) / 1000,
         costUsd: estimateCostUsd(model, result.inputTokens, result.outputTokens),
       });
-      return { ok: true, text: result.text };
+      return { ok: true, text: result.text, stopReason: result.stopReason };
     } catch {
       recordLlmCall({ type: kind, model, status: "error", latencySeconds: (this.clock() - start) / 1000, costUsd: 0 });
       return { ok: false };
@@ -124,8 +133,9 @@ export class ReflectionWorker {
     }
     this.clearBackoff(row.id);
 
-    let validated = await this.validateAgainstRow(row, first.text);
+    let validated = await this.validateAgainstRow(row, first.text, first.stopReason);
     let lastRawText = first.text;
+    let lastStopReason = first.stopReason;
     if (!validated) {
       const retry = await this.attemptCall(model, "event", JSON.stringify(row.request));
       if (!retry.ok) {
@@ -133,10 +143,11 @@ export class ReflectionWorker {
         return "transport_error";
       }
       lastRawText = retry.text;
-      validated = await this.validateAgainstRow(row, retry.text);
+      lastStopReason = retry.stopReason;
+      validated = await this.validateAgainstRow(row, retry.text, retry.stopReason);
     }
     if (!validated) {
-      await markReflectionFailed(this.pool, row.id, lastRawText);
+      await markReflectionFailed(this.pool, row.id, lastRawText, lastStopReason);
       return "failed";
     }
     return this.finalizeApply(row, validated);
@@ -178,14 +189,26 @@ export class ReflectionWorker {
     for (const result of results) {
       const row = byId.get(result.customId);
       if (!row) continue;
-      this.clearBackoff(row.id);
 
       if (!result.succeeded || result.text === undefined) {
+        // Ошибка НА УРОВНЕ ОДНОГО ЭЛЕМЕНТА batch (rate_limit/overloaded/
+        // expired и т.п., Anthropic Batch API возвращает статус per-item) —
+        // это сигнал временной недоступности ИМЕННО ДЛЯ ЭТОГО элемента, а не
+        // окончательный провал валидации ответа. 7.3 (деградация) требует
+        // "очередь копится и обрабатывается с экспоненциальными ретраями" —
+        // раньше это НАВСЕГДА помечало reflections как 'failed' без единой
+        // попытки повтора: на приёмке фазы 7 такие batch-ошибки оказались
+        // 39 из 96 (41%) реальных отказов — то есть почти половина "провалов
+        // валидации" вообще не были ответом модели, а обрывом на транспортном
+        // уровне (см. ops/DEVIATIONS.md). Оставляем строку 'queued' + бэкофф,
+        // тем же путём, что и полная недоступность API — следующий проход
+        // подберёт кандидата снова.
         recordLlmCall({ type: "background", model, status: "error", latencySeconds: 0, costUsd: 0 });
-        await markReflectionFailed(this.pool, row.id);
-        outcomes.set(row.id, "failed");
+        this.recordTransportFailure(row.id);
+        outcomes.set(row.id, "transport_error");
         continue;
       }
+      this.clearBackoff(row.id);
       recordLlmCall({
         type: "background",
         model,
@@ -194,8 +217,9 @@ export class ReflectionWorker {
         costUsd: estimateCostUsd(model, result.inputTokens ?? 0, result.outputTokens ?? 0),
       });
 
-      let validated = await this.validateAgainstRow(row, result.text);
+      let validated = await this.validateAgainstRow(row, result.text, result.stopReason);
       let lastRawText = result.text;
+      let lastStopReason = result.stopReason;
       if (!validated) {
         // 1 ретрай (7.3) — обычным (не batch) вызовом: это единичная
         // досылка для ОДНОГО существа, разворачивать ради нее ещё один batch
@@ -203,11 +227,12 @@ export class ReflectionWorker {
         const retry = await this.attemptCall(model, "background", JSON.stringify(row.request));
         if (retry.ok) {
           lastRawText = retry.text;
-          validated = await this.validateAgainstRow(row, retry.text);
+          lastStopReason = retry.stopReason;
+          validated = await this.validateAgainstRow(row, retry.text, retry.stopReason);
         }
       }
       if (!validated) {
-        await markReflectionFailed(this.pool, row.id, lastRawText);
+        await markReflectionFailed(this.pool, row.id, lastRawText, lastStopReason);
         outcomes.set(row.id, "failed");
         continue;
       }

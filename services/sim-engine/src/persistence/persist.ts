@@ -253,6 +253,55 @@ export async function syncAversions(pool: Pool, aversions: AversionRecord[]): Pr
   }
 }
 
+/**
+ * Атомарная персистентность самого первого состояния мира (genesis, 6.1):
+ * INSERT genesis-популяции и world_clock в ОДНОЙ транзакции.
+ *
+ * До этой правки creatures и world_clock писались раздельно двумя отдельными
+ * await (upsertCreatures в первом persistTick(), потом updateWorldClock чуть
+ * позже в той же функции) — крах процесса МЕЖДУ этими двумя запросами (после
+ * того, как genesis-особи уже вставлены, но до записи world_clock) оставлял
+ * БД в состоянии "особи есть, world_clock пуст". Следующий запуск
+ * loadWorldState видел пустой world_clock, считал это холодным стартом и
+ * запускал genesis ЕЩЁ РАЗ поверх уже существующих особей — ровно тот баг,
+ * что обнаружился при приёмке (40->80 пингвинов, 4->8 касаток, все с
+ * parent_a IS NULL, см. ops/DEVIATIONS.md, фаза 7). Транзакция делает два
+ * INSERT неразрывными: Postgres либо закоммитит оба, либо откатит оба —
+ * частичного состояния "особи без world_clock" при использовании этой
+ * функции возникнуть не может.
+ */
+export async function persistGenesis(pool: Pool, creatures: Creature[], tick: number, phase: "day" | "night"): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    if (creatures.length > 0) {
+      const values: unknown[] = [];
+      const rowPlaceholders: string[] = [];
+      for (const creature of creatures) {
+        const row = creatureRowValues(creature);
+        const base = values.length;
+        rowPlaceholders.push(`(${row.map((_, j) => `$${base + j + 1}`).join(", ")})`);
+        values.push(...row);
+      }
+      await client.query(
+        `INSERT INTO creatures (${FULL_COLUMNS.join(", ")}) VALUES ${rowPlaceholders.join(", ")} ON CONFLICT (id) DO NOTHING`,
+        values,
+      );
+    }
+    await client.query(
+      `INSERT INTO world_clock (id, tick, phase, updated_at) VALUES (1, $1, $2, now())
+       ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick, phase = EXCLUDED.phase, updated_at = now()`,
+      [tick, phase],
+    );
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 export async function updateWorldClock(pool: Pool, tick: number, phase: "day" | "night"): Promise<void> {
   await pool.query(
     `INSERT INTO world_clock (id, tick, phase, updated_at) VALUES (1, $1, $2, now())

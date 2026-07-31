@@ -109,9 +109,35 @@ services:
       context: .
       dockerfile: apps/frontend/Dockerfile
     restart: unless-stopped
+    environment:
+      # Один публичный домен (ops/caddy/Caddyfile разводит /ws и /api/* на
+      # api-gateway, остальное — сюда) — без этого фронтенд по умолчанию
+      # обратился бы на "<hostname>:3000", которого снаружи docker-сети нет
+      # (api-gateway порт 3000 остаётся забинжен только на 127.0.0.1).
+      VITE_API_URL: https://aurwin.ru
+      VITE_WS_URL: wss://aurwin.ru/ws
     ports:
       - "127.0.0.1:5173:5173"
     depends_on:
+      - api-gateway
+
+  # Единственная публичная точка входа (80/443) — TLS Let's Encrypt,
+  # автопродление встроено в Caddy (ACME HTTP-01), отдельный certbot/cron
+  # не нужен. Остальные сервисы либо не публикуются вовсе (postgres,
+  # sim-engine, reflection-worker), либо только на 127.0.0.1 (api-gateway,
+  # frontend, observability) — см. комментарии выше и ops/caddy/Caddyfile.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./ops/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
       - api-gateway
 
   # Не долгоживущий сервис — только для `docker compose run --rm db-maintenance
@@ -178,3 +204,5 @@ volumes:
   wal_archive:
   prometheus_data:
   grafana_data:
+  caddy_data:
+  caddy_config:

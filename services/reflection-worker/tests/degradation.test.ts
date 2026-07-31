@@ -109,4 +109,55 @@ describe("reflection-worker: деградация при недоступном 
     expect(transport.messageCalls.length).toBeGreaterThan(callsBefore);
     expect(worker.backoffAttemptsFor(reflectionId)).toBe(2);
   });
+
+  /**
+   * Регрессия приёмки фазы 7: ошибка НА УРОВНЕ ОДНОГО ЭЛЕМЕНТА Anthropic
+   * Batch API (rate_limit/overloaded/expired у конкретного элемента, а не у
+   * batch в целом) раньше НАВСЕГДА помечала reflections как 'failed' без
+   * единой попытки повтора — 39 из 96 реальных отказов валидации на боевом
+   * прогоне оказались именно такими batch-ошибками, а не невалидным ответом
+   * модели (см. ops/DEVIATIONS.md). Правильное поведение — то же самое, что
+   * при полной недоступности API: строка остаётся 'queued', подключается
+   * бэкофф, следующий проход подбирает кандидата снова.
+   */
+  it("ошибка ОДНОГО элемента batch (не всего batch) — не 'failed' навсегда, а 'queued' с бэкоффом, и подбирается повторно", async () => {
+    const pool = getTestPool();
+    await pool.query(`INSERT INTO world_clock (id, tick, phase) VALUES (1, 30, 'day') ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick`);
+
+    const creatureName = "БатчОшибка";
+    const creatureId = await insertCreature(pool, { species: "orca", name: creatureName });
+    // Только фоновый кандидат (is_asleep=TRUE) — БЕЗ триггерного эпизода:
+    // findDueBackgroundCandidates не требует эпизодов вовсе (см. db.ts), а
+    // лишний 'birth' здесь заодно сделал бы существо ЕЩЁ и событийным
+    // кандидатом (EVENT_TRIGGER_TYPES), создавая ВТОРУЮ строку reflections
+    // и путая счёт ниже.
+    await pool.query(`UPDATE creatures SET is_asleep = TRUE WHERE id = $1`, [creatureId]);
+
+    const transport = new FakeAnthropicTransport(buildGroundedResponse);
+    // Симулируем ошибку rate_limit ИМЕННО для этого существа с самого первого
+    // прохода — прежде чем reflections.id вообще существует (matcher по
+    // содержимому payload, не по id).
+    transport.failingContentMatch = (userContent) => userContent.includes(creatureName);
+    let fakeNow = 0;
+    const worker = new ReflectionWorker(pool, transport, () => fakeNow);
+
+    const result = await worker.runPass();
+    expect(result.transportErrors).toBeGreaterThan(0);
+    expect(result.failed).toBe(0); // НЕ помечено как окончательный провал
+
+    const reflectionRow = await pool.query(`SELECT id, status, response FROM reflections WHERE creature_id = $1`, [creatureId]);
+    expect(reflectionRow.rowCount).toBe(1);
+    const reflectionId = reflectionRow.rows[0].id;
+    expect(reflectionRow.rows[0].status).toBe("queued"); // остаётся в очереди, не 'failed'
+    expect(reflectionRow.rows[0].response).toBeNull();
+    expect(worker.backoffAttemptsFor(reflectionId)).toBeGreaterThan(0);
+
+    // Убираем симулированную ошибку и продвигаем время за пределы бэкоффа — кандидат подбирается и применяется штатно.
+    transport.failingContentMatch = undefined;
+    fakeNow = 60 * 60_000;
+    await worker.runPass();
+
+    const final = await pool.query(`SELECT status FROM reflections WHERE id = $1`, [reflectionId]);
+    expect(final.rows[0].status).toBe("applied");
+  });
 });

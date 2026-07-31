@@ -1,0 +1,24 @@
+# Caddy — единственный сервис, публично слушающий 80/443 (CLAUDE.md/А.7:
+# Postgres/внутренние метрики наружу не торчат — см. docker-compose.yml,
+# у остальных сервисов порты либо не публикуются, либо только на 127.0.0.1).
+# TLS-сертификат Let's Encrypt выпускается и обновляется автоматически самим
+# Caddy (ACME HTTP-01 на порту 80) — отдельного certbot/cron не требуется.
+#
+# Маршрутизация — одна публичная точка входа на два внутренних сервиса
+# (А.1: api-gateway — WebSocket + REST для карточек/соцкарты; frontend —
+# рендер). apps/frontend собирается с VITE_API_URL=https://aurwin.ru и
+# VITE_WS_URL=wss://aurwin.ru/ws (см. docker-compose.yml) — поэтому все
+# запросы идут на ОДИН домен, и прокси обязан развести их по префиксу.
+aurwin.ru {
+	handle /ws* {
+		reverse_proxy api-gateway:3000
+	}
+
+	handle /api/* {
+		reverse_proxy api-gateway:3000
+	}
+
+	handle {
+		reverse_proxy frontend:5173
+	}
+}
