@@ -101,6 +101,8 @@ export class WorldStore {
   fishDensity: Record<string, number> = {};
   fishDensityRevision = 0;
   tickSeconds = 2;
+  /** Внутренние сутки, реальных часов (snapshot). */
+  innerDayRealHours = 3.4;
   tick = 0;
   phase: Phase = "day";
   metaRevision = 0;
@@ -175,6 +177,7 @@ export class WorldStore {
     tick: number;
     phase: Phase;
     tick_seconds: number;
+    inner_day_real_hours?: number;
     creatures: CreatureDto[];
     zones: ZoneDto[];
     fish_density: Record<string, number>;
@@ -184,6 +187,9 @@ export class WorldStore {
     this.fishDensity = msg.fish_density;
     this.fishDensityRevision += 1;
     this.tickSeconds = msg.tick_seconds;
+    if (typeof msg.inner_day_real_hours === "number" && msg.inner_day_real_hours > 0) {
+      this.innerDayRealHours = msg.inner_day_real_hours;
+    }
     this.durationMsEma = msg.tick_seconds * 1000;
     this.lastDeltaAt = 0;
     this.tick = msg.tick;

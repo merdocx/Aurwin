@@ -12,7 +12,7 @@ const CONSTANTS_PATH = path.resolve(__dirname, "../../../config/constants.yaml")
  * загрузчика, что и в sim-engine/services/db (см. world/constants.ts).
  */
 export interface GatewayConstants {
-  time: { visual_tick_seconds: number };
+  time: { visual_tick_seconds: number; inner_day_real_hours: number };
   world: {
     map: { width: number; height: number };
     zones: Record<string, { type: "ice" | "water"; share: number }>;

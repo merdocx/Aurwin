@@ -55,6 +55,8 @@ export interface SnapshotMessage {
   tick: number;
   phase: Phase;
   tick_seconds: number;
+  /** Длительность внутренних суток в реальных часах (constants.yaml). */
+  inner_day_real_hours: number;
   creatures: CreatureDto[];
   zones: ZoneDto[];
   fish_density: Record<string, number>;

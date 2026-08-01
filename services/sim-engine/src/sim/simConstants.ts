@@ -91,6 +91,7 @@ export interface SimConstants {
       stealth_approach: number;
     };
     body_radius_units: { penguin: number; orca: number };
+    shore_clearance_radius_units: { penguin_water: number; orca: number };
     stealth_approach: { speed_multiplier: number; perceived_threat_multiplier: number };
     steering: {
       max_turn_rad_per_tick: number;

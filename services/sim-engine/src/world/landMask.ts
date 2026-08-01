@@ -203,6 +203,54 @@ export function pushOrcaOffLand(simX: number, simY: number, bounds: { width: num
   return { x: bounds.width * 0.92, y: Math.min(bounds.height, Math.max(0, simY)) };
 }
 
+function footprintTouchesLand(x: number, y: number, radius: number): boolean {
+  if (isLandSim(x, y, 0)) return true;
+  const samples = 16;
+  for (let i = 0; i < samples; i++) {
+    const a = (i / samples) * Math.PI * 2;
+    if (isLandSim(x + Math.cos(a) * radius, y + Math.sin(a) * radius, 0)) return true;
+  }
+  return false;
+}
+
+/**
+ * Центр + shore radius целиком в воде («стена» берега).
+ * Радиус = halfLength спрайта; вызывать во сне и после separation.
+ */
+export function clearFootprintFromLand(
+  simX: number,
+  simY: number,
+  radius: number,
+  bounds: { width: number; height: number },
+): { x: number; y: number } {
+  if (radius <= 0) return { x: simX, y: simY };
+
+  let x = simX;
+  let y = simY;
+  if (isLandSim(x, y)) {
+    const pushed = pushOrcaOffLand(x, y, bounds);
+    x = pushed.x;
+    y = pushed.y;
+  }
+  if (!footprintTouchesLand(x, y, radius)) return { x, y };
+
+  const target = ecoZoneCenterSim("open_water");
+  for (let step = 0; step < 64; step++) {
+    const dx = target.x - x;
+    const dy = target.y - y;
+    const mag = Math.hypot(dx, dy) || 1;
+    x += (dx / mag) * Math.max(2, radius * 0.15);
+    y += (dy / mag) * Math.max(2, radius * 0.15);
+    x = Math.min(bounds.width, Math.max(0, x));
+    y = Math.min(bounds.height, Math.max(0, y));
+    if (!footprintTouchesLand(x, y, radius)) return { x, y };
+  }
+  return pushOrcaOffLand(x, y, bounds);
+}
+
+/** @deprecated alias — use clearFootprintFromLand */
+export const clearOrcaFootprintFromLand = clearFootprintFromLand;
+
 /** Сэмпл точки на земле / в воде для genesis. */
 export function sampleLandSim(rng: () => number, tries = 80): { x: number; y: number } {
   for (let i = 0; i < tries; i++) {

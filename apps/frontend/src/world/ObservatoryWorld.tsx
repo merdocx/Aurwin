@@ -38,9 +38,10 @@ interface ViewCreature {
 interface ElCache {
   el: HTMLButtonElement;
   facingEl: HTMLElement | null;
+  statusEl: HTMLElement | null;
   noseLed: boolean;
-  noseX: number;
-  noseY: number;
+  anchorX: number;
+  anchorY: number;
 }
 
 interface HighlightRing {
@@ -247,9 +248,10 @@ export const ObservatoryWorld = memo(function ObservatoryWorld({ store, onSelect
       return;
     }
     const facingEl = el.querySelector("[data-facing]") as HTMLElement | null;
+    const statusEl = el.querySelector("[data-status]") as HTMLElement | null;
     const noseLed = el.dataset.noseLed === "1";
-    const noseX = Number(el.dataset.noseX ?? 0);
-    const noseY = Number(el.dataset.noseY ?? 0);
+    const anchorX = Number(el.dataset.anchorX ?? 0);
+    const anchorY = Number(el.dataset.anchorY ?? 0);
     // Сразу ставим известную позицию — иначе до следующего RAF вспышка в (0,0).
     const map = posCache.current.get(id);
     if (map) {
@@ -257,7 +259,7 @@ export const ObservatoryWorld = memo(function ObservatoryWorld({ store, onSelect
         ? `translate3d(${map.x}px, ${map.y}px, 0)`
         : `translate3d(${map.x}px, ${map.y}px, 0) translate(-50%, -50%)`;
     }
-    elCache.current.set(id, { el, facingEl, noseLed, noseX, noseY });
+    elCache.current.set(id, { el, facingEl, statusEl, noseLed, anchorX, anchorY });
   }, []);
 
   useEffect(() => {
@@ -311,12 +313,21 @@ export const ObservatoryWorld = memo(function ObservatoryWorld({ store, onSelect
       const { facingEl } = cache;
       if (!facingEl) return;
       cache.noseLed = cache.el.dataset.noseLed === "1";
-      cache.noseX = Number(cache.el.dataset.noseX ?? 0);
-      cache.noseY = Number(cache.el.dataset.noseY ?? 0);
+      cache.anchorX = Number(cache.el.dataset.anchorX ?? 0);
+      cache.anchorY = Number(cache.el.dataset.anchorY ?? 0);
+      if (!cache.statusEl || !cache.statusEl.isConnected) {
+        cache.statusEl = cache.el.querySelector("[data-status]") as HTMLElement | null;
+      }
       if (cache.noseLed) {
-        const deg = (facing * 180) / Math.PI + 180;
+        const rad = facing + Math.PI;
+        const deg = (rad * 180) / Math.PI;
+        // Якорь = центр тела (= pos сима / shore circle).
         facingEl.style.transformOrigin = "0 0";
-        facingEl.style.transform = `rotate(${deg}deg) translate(${-cache.noseX}px, ${-cache.noseY}px)`;
+        facingEl.style.transform = `rotate(${deg}deg) translate(${-cache.anchorX}px, ${-cache.anchorY}px)`;
+        if (cache.statusEl) {
+          const lift = Number(cache.el.dataset.statusLift ?? 24);
+          cache.statusEl.style.transform = `translate(0px, ${-lift}px) translate(-50%, -50%)`;
+        }
       } else {
         facingEl.style.transformOrigin = "50% 50%";
         facingEl.style.transform = faceRight ? "" : "scaleX(-1)";

@@ -11,6 +11,9 @@ export {
   isLandMap,
   toMap,
   toSim,
+  pushOrcaOffLand,
+  clearOrcaFootprintFromLand,
+  clearFootprintFromLand,
 } from "./landMask.js";
 
 

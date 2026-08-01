@@ -350,3 +350,16 @@ API/UI: рёбра графа friend / mate / kin разными цветами.
 
 Удача А.10 перенесена: notice→flee commit; group/guard = срыв сближения
 (coordinate отменяет). FE: мир-точка = нос, `rotate(facing+180)` в воде.
+
+## 2026-08-01 — стена берега (halfLength)
+
+Круг клиренса в **центре тела**, R = halfLength спрайта / MAP_PER_SIM.
+`body_radius` (10/28) оставлен для separation/охоты.
+
+| Параметр | Значение |
+|----------|----------|
+| shore_clearance orca | **27** (L=84 map) |
+| shore_clearance penguin_water | **15** (L=48 map) |
+
+Sim: `clearFootprintFromLand` для orca всегда и penguin в воде.
+FE: якорь воды = центр тела (не нос).

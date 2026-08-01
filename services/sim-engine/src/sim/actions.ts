@@ -5,6 +5,7 @@ import { fatigueSkillMultiplier, fatigueSpeedMultiplier } from "./needs.js";
 import { speedForAgeStage, stepAndReflect, type Medium } from "../world/movement.js";
 import { type ZoneName } from "../world/zones.js";
 import {
+  clearFootprintFromLand,
   ecoZoneAtSim,
   ecoZoneCenterSim,
   isLandSim,
@@ -62,56 +63,23 @@ function dirFromHeading(heading: number): Vector2 {
   return { x: Math.cos(heading), y: Math.sin(heading) };
 }
 
-/** Касатка: центр + body_radius целиком в воде — иначе спрайт «лежит» на льду. */
+/** Стена берега: центр + shore_clearance (halfLength). Orca всегда; penguin только в воде. */
 function clearBodyFromLand(creature: Creature, bounds: { width: number; height: number }): void {
-  if (creature.species !== "orca") return;
-  const r = getSimConstants().movement.body_radius_units.orca;
-  if (r <= 0) return;
-
-  if (isLandSim(creature.pos.x, creature.pos.y)) {
-    creature.pos = pushOrcaOffLand(creature.pos.x, creature.pos.y, bounds);
+  const shore = getSimConstants().movement.shore_clearance_radius_units;
+  let r = 0;
+  if (creature.species === "orca") {
+    r = shore.orca;
+  } else if (!isLandSim(creature.pos.x, creature.pos.y)) {
+    r = shore.penguin_water;
+  } else {
+    return;
+  }
+  const before = creature.pos;
+  const onLand = isLandSim(before.x, before.y);
+  creature.pos = clearFootprintFromLand(before.x, before.y, r, bounds);
+  if (onLand && (creature.pos.x !== before.x || creature.pos.y !== before.y)) {
     creature.velocity = { x: -creature.velocity.x, y: -creature.velocity.y };
   }
-
-  let needsPush = isLandSim(creature.pos.x, creature.pos.y, 0);
-  if (!needsPush) {
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2;
-      if (isLandSim(creature.pos.x + Math.cos(a) * r, creature.pos.y + Math.sin(a) * r, 0)) {
-        needsPush = true;
-        break;
-      }
-    }
-  }
-  if (!needsPush) return;
-
-  const target = ecoZoneCenterSim("open_water");
-  let x = creature.pos.x;
-  let y = creature.pos.y;
-  for (let step = 0; step < 48; step++) {
-    const dx = target.x - x;
-    const dy = target.y - y;
-    const mag = Math.hypot(dx, dy) || 1;
-    x += (dx / mag) * Math.max(2, r * 0.15);
-    y += (dy / mag) * Math.max(2, r * 0.15);
-    x = Math.min(bounds.width, Math.max(0, x));
-    y = Math.min(bounds.height, Math.max(0, y));
-    let clear = !isLandSim(x, y, 0);
-    if (clear) {
-      for (let i = 0; i < 8; i++) {
-        const a = (i / 8) * Math.PI * 2;
-        if (isLandSim(x + Math.cos(a) * r, y + Math.sin(a) * r, 0)) {
-          clear = false;
-          break;
-        }
-      }
-    }
-    if (clear) {
-      creature.pos = { x, y };
-      return;
-    }
-  }
-  creature.pos = pushOrcaOffLand(x, y, bounds);
 }
 
 type Steering = ReturnType<typeof getSimConstants>["movement"]["steering"];
@@ -187,8 +155,11 @@ export function resolveMovement(
   else if (action === "stealth_approach") speed *= actionMult.stealth_approach;
 
   // Asleep = still (XOR with continuous move when awake).
+  // Клиренс от льда всё равно нужен: иначе спящая касатка «лежит» на берегу.
   if (action === "sleep" || creature.isAsleep) {
     creature.velocity = { x: 0, y: 0 };
+    clearBodyFromLand(creature, bounds);
+    creature.zone = ecoZoneAtSim(creature.pos.x, creature.pos.y);
     return;
   }
 

@@ -32,8 +32,9 @@
 @keyframes aur-footprint-r{0%,90%{opacity:0}5%{opacity:0}20%{opacity:.5}55%{opacity:.5}70%{opacity:0}100%{opacity:0}}
 @keyframes aur-tail-swish{0%,100%{transform:rotate(-12deg)}50%{transform:rotate(12deg)}}
 @keyframes aur-fin-flutter{0%,100%{transform:rotate(-6deg)}50%{transform:rotate(8deg)}}
+@keyframes aur-fin-paddle{0%,100%{transform:rotate(-14deg)}50%{transform:rotate(16deg)}}
 @keyframes aur-chomp{0%,100%{transform:scaleY(1)}50%{transform:scaleY(0.55)}}
-@keyframes aur-jump-arc{0%{transform:translateY(0) rotate(0deg) scale(1)}30%{transform:translateY(-26px) rotate(-10deg) scale(1.05)}60%{transform:translateY(-26px) rotate(10deg) scale(1.05)}100%{transform:translateY(0) rotate(0deg) scale(1)}}
+@keyframes aur-jump-arc{0%{transform:translateY(0) scale(1)}30%{transform:translateY(-26px) scale(1.05)}60%{transform:translateY(-26px) scale(1.05)}100%{transform:translateY(0) scale(1)}}
 @keyframes aur-trail-fade{0%{opacity:.4}100%{opacity:0}}
 
 @media (prefers-reduced-motion: reduce) {

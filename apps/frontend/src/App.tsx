@@ -61,7 +61,7 @@ export function App() {
   const penguins = stats?.population.penguin ?? "—";
   const orcas = stats?.population.orca ?? "—";
   const phaseHint = phase === "day" ? "Светлая половина суток — колония кормится" : "Большая часть колонии спит";
-  const ageLabel = formatWorldAge(tick, store.tickSeconds);
+  const ageLabel = formatWorldAge(tick, store.tickSeconds, store.innerDayRealHours);
 
   const onSelectCreature = useCallback(
     (id: string) => {

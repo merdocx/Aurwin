@@ -1,7 +1,7 @@
 import { getSimConstants } from "./simConstants.js";
 import { distance } from "./huntingAttractiveness.js";
 import { isAlive, type Creature } from "./types.js";
-import { ecoZoneAtSim, isLandSim, pushOrcaOffLand } from "../world/landMask.js";
+import { clearFootprintFromLand, ecoZoneAtSim, isLandSim } from "../world/landMask.js";
 import type { IndexedPoint, SpatialGrid } from "../world/spatialIndex.js";
 
 /**
@@ -51,8 +51,11 @@ export function applySoftSeparation(
   function clampCreature(c: Creature): void {
     c.pos.x = Math.min(bounds.width, Math.max(0, c.pos.x));
     c.pos.y = Math.min(bounds.height, Math.max(0, c.pos.y));
-    if (c.species === "orca" && isLandSim(c.pos.x, c.pos.y)) {
-      c.pos = pushOrcaOffLand(c.pos.x, c.pos.y, bounds);
+    const shore = getSimConstants().movement.shore_clearance_radius_units;
+    if (c.species === "orca") {
+      c.pos = clearFootprintFromLand(c.pos.x, c.pos.y, shore.orca, bounds);
+    } else if (!isLandSim(c.pos.x, c.pos.y)) {
+      c.pos = clearFootprintFromLand(c.pos.x, c.pos.y, shore.penguin_water, bounds);
     }
   }
 

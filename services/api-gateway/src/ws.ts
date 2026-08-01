@@ -242,6 +242,7 @@ class GatewayHub {
             // берётся с сервера, а не дублируется как хардкод во фронтенде
             // (CLAUDE.md, п.3: числа симуляции только из constants.yaml).
             tick_seconds: this.constants.time.visual_tick_seconds,
+            inner_day_real_hours: this.constants.time.inner_day_real_hours,
             creatures: dto,
             zones: zoneLayout(),
             fish_density: clock.fishDensity,
