@@ -113,7 +113,11 @@ export class ReflectionWorker {
   }
 
   private async finalizeApply(row: QueuedReflectionRow, validated: ValidatedReflection): Promise<"applied" | "discarded"> {
-    await markReflectionSent(this.pool, row.id, validated);
+    // Сохраняем ответ как 'sent' до apply — при crash следующий проход
+    // подхватит status=sent без повторного LLM.
+    if (row.status !== "sent") {
+      await markReflectionSent(this.pool, row.id, validated);
+    }
     const tick = await fetchWorldTick(this.pool);
     const outcome = await applyReflectionResult(this.pool, {
       reflectionId: row.id,
@@ -125,7 +129,20 @@ export class ReflectionWorker {
     return outcome.applied ? "applied" : "discarded";
   }
 
+  /** Crash recovery: response уже лежит в БД как ValidatedReflection. */
+  private async processSentRecovery(row: QueuedReflectionRow): Promise<ReflectionOutcome> {
+    const validated = row.response as ValidatedReflection | null;
+    if (!validated || typeof validated !== "object" || typeof validated.narrative !== "string") {
+      await markReflectionFailed(this.pool, row.id, JSON.stringify(row.response ?? null));
+      return "failed";
+    }
+    this.clearBackoff(row.id);
+    return this.finalizeApply(row, validated);
+  }
+
   private async processEvent(row: QueuedReflectionRow): Promise<ReflectionOutcome> {
+    if (row.status === "sent") return this.processSentRecovery(row);
+
     const payload = row.request as ReflectionRequestPayload;
     const episodeTypes = (payload?.new_episodes ?? []).map((e) => e.type);
     const model = modelForEvent(episodeTypes);
@@ -262,11 +279,17 @@ export class ReflectionWorker {
       else summary.transportErrors += 1;
     };
 
-    for (const row of eligible.filter((r) => r.kind === "event")) {
+    // Сначала crash-recovery 'sent' — без нового LLM.
+    for (const row of eligible.filter((r) => r.status === "sent")) {
+      tally(await this.processSentRecovery(row));
+    }
+
+    const queued = eligible.filter((r) => r.status === "queued");
+    for (const row of queued.filter((r) => r.kind === "event")) {
       tally(await this.processEvent(row));
     }
 
-    const backgroundOutcomes = await this.processBackgroundBatch(eligible.filter((r) => r.kind === "background"));
+    const backgroundOutcomes = await this.processBackgroundBatch(queued.filter((r) => r.kind === "background"));
     for (const outcome of backgroundOutcomes.values()) tally(outcome);
 
     return summary;

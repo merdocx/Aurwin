@@ -53,9 +53,22 @@ const FULL_COLUMNS = [
   "weights_birth",
   "last_reflection_at",
   "last_reproduced_at_tick",
+  "continuous_starvation_real_hours",
 ] as const;
 
-const LIGHT_UPSERT_COLUMNS = ["id", "pos_x", "pos_y", "zone", "emotion", "is_asleep", "activity"] as const;
+const LIGHT_UPSERT_COLUMNS = [
+  "id",
+  "pos_x",
+  "pos_y",
+  "zone",
+  "emotion",
+  "is_asleep",
+  "activity",
+  "needs",
+  "skills",
+  "authority",
+  "continuous_starvation_real_hours",
+] as const;
 
 /**
  * Колонки, которые reflection-worker (фаза 6) применяет НАПРЯМУЮ в Postgres
@@ -84,8 +97,8 @@ function creatureRowValues(c: Creature): unknown[] {
     c.bornAtTick,
     c.parentA ?? null,
     c.parentB ?? null,
-    c.pos.x,
-    c.pos.y,
+    toPgReal(c.pos.x),
+    toPgReal(c.pos.y),
     c.zone,
     JSON.stringify(c.traits),
     JSON.stringify(c.traitsBirth),
@@ -98,12 +111,13 @@ function creatureRowValues(c: Creature): unknown[] {
     c.chronotype,
     c.isAsleep,
     c.activity ?? "idle",
-    c.authority,
+    toPgReal(c.authority),
     JSON.stringify(c.habits),
     JSON.stringify(c.weights),
     JSON.stringify(c.weightsBirth),
     c.lastReflectionAt,
     c.lastReproducedAtTick ?? null,
+    toPgReal(c.continuousStarvationRealHours),
   ];
 }
 
@@ -117,16 +131,20 @@ export async function upsertCreatures(pool: Pool, creatures: Creature[], mode: "
     for (const creature of creatures) {
       const row = [
         creature.id,
-        creature.pos.x,
-        creature.pos.y,
+        toPgReal(creature.pos.x),
+        toPgReal(creature.pos.y),
         creature.zone,
         JSON.stringify(creature.emotion),
         creature.isAsleep,
         creature.activity ?? "idle",
+        JSON.stringify(creature.needs),
+        JSON.stringify(creature.skills),
+        toPgReal(creature.authority),
+        toPgReal(creature.continuousStarvationRealHours),
       ];
       const base = values.length;
       rowPlaceholders.push(
-        `($${base + 1}::uuid, $${base + 2}::real, $${base + 3}::real, $${base + 4}::text, $${base + 5}::jsonb, $${base + 6}::boolean, $${base + 7}::text)`,
+        `($${base + 1}::uuid, $${base + 2}::real, $${base + 3}::real, $${base + 4}::text, $${base + 5}::jsonb, $${base + 6}::boolean, $${base + 7}::text, $${base + 8}::jsonb, $${base + 9}::jsonb, $${base + 10}::real, $${base + 11}::real)`,
       );
       values.push(...row);
     }
@@ -137,7 +155,11 @@ export async function upsertCreatures(pool: Pool, creatures: Creature[], mode: "
         zone = v.zone,
         emotion = v.emotion,
         is_asleep = v.is_asleep,
-        activity = v.activity
+        activity = v.activity,
+        needs = v.needs,
+        skills = v.skills,
+        authority = v.authority,
+        continuous_starvation_real_hours = v.continuous_starvation_real_hours
       FROM (VALUES ${rowPlaceholders.join(", ")}) AS v(${LIGHT_UPSERT_COLUMNS.join(", ")})
       WHERE c.id = v.id`,
       values,

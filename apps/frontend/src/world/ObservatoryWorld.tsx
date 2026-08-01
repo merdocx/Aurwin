@@ -50,6 +50,8 @@ interface HighlightRing {
 }
 
 const LOD_SCALE_THRESHOLD = 0.7;
+/** LOD по числу смонтированных в viewport, не по всей популяции (genesis 44 не должен всегда упрощать). */
+const LOD_MOUNTED_COUNT = 55;
 const VIEWPORT_PAD = 160;
 
 function deriveEmotion(meta: CreatureMeta): EmotionKind {
@@ -308,7 +310,6 @@ export const ObservatoryWorld = memo(function ObservatoryWorld({ store, onSelect
     function applyFacing(cache: ElCache, facing: number, faceRight: boolean): void {
       const { facingEl } = cache;
       if (!facingEl) return;
-      // Refresh nose flags after React meta re-render (dataset may change).
       cache.noseLed = cache.el.dataset.noseLed === "1";
       cache.noseX = Number(cache.el.dataset.noseX ?? 0);
       cache.noseY = Number(cache.el.dataset.noseY ?? 0);
@@ -434,7 +435,7 @@ export const ObservatoryWorld = memo(function ObservatoryWorld({ store, onSelect
   }
 
   const viewById = new Map(views.map((v) => [v.id, v]));
-  const simplified = mapScale < LOD_SCALE_THRESHOLD || views.length > 40;
+  const simplified = mapScale < LOD_SCALE_THRESHOLD || mountedIds.length > LOD_MOUNTED_COUNT;
 
   return (
     <div className="observatory-world">

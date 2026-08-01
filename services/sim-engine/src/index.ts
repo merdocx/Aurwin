@@ -120,26 +120,37 @@ async function persistTick(): Promise<void> {
   const alive = sim.aliveCreatures();
   const phase = sim.world.dayNight.phase();
   const isFullSnapshot = sim.currentTick % snapshot_interval_ticks === 0;
-  // Light UPDATE не INSERT'ит новорождённых — на тике birth нужен full.
-  const needsInsert = events.some((e) => e.type === "birth");
+  // Light UPDATE не INSERT'ит новых строк — full нужен на birth и reintroduction.
+  const needsInsert = events.some((e) => e.type === "birth" || e.type === "reintroduction");
 
-  await upsertCreatures(pool, alive, isFullSnapshot || needsInsert ? "full" : "light");
-  if (deaths.length > 0) await applyDeaths(pool, deaths);
-  if (events.length > 0) await insertWorldEvents(pool, events);
-  if (episodes.length > 0) await insertEpisodes(pool, episodes);
-  if (newSignals.length > 0) await insertSignals(pool, newSignals);
-  if (resolvedSignals.length > 0) await updateSignalOutcomes(pool, resolvedSignals);
-  if (decisionLogs.length > 0) await insertDecisionLogs(pool, decisionLogs);
-  if (isFullSnapshot) {
-    await syncBonds(pool, [...sim.bonds.values()]);
-    await syncAversions(pool, [...sim.aversions.values()]);
-    await syncPerceivedStates(pool, alive);
-    await syncPerceivedZoneThreat(pool, alive);
-    await syncSignalTrust(pool, alive);
+  try {
+    await upsertCreatures(pool, alive, isFullSnapshot || needsInsert ? "full" : "light");
+    if (deaths.length > 0) await applyDeaths(pool, deaths);
+    if (events.length > 0) await insertWorldEvents(pool, events);
+    if (episodes.length > 0) await insertEpisodes(pool, episodes);
+    if (newSignals.length > 0) await insertSignals(pool, newSignals);
+    if (resolvedSignals.length > 0) await updateSignalOutcomes(pool, resolvedSignals);
+    if (decisionLogs.length > 0) await insertDecisionLogs(pool, decisionLogs);
+    if (isFullSnapshot) {
+      await syncBonds(pool, [...sim.bonds.values()]);
+      await syncAversions(pool, [...sim.aversions.values()]);
+      await syncPerceivedStates(pool, alive);
+      await syncPerceivedZoneThreat(pool, alive);
+      await syncSignalTrust(pool, alive);
+    }
+    await updateWorldClock(pool, sim.currentTick, phase, sim.fishDensitySnapshot());
+    await notifyTick(pool, sim.currentTick, phase);
+    setPopulationGauges(sim);
+  } catch (err) {
+    // Вернуть буферы в очередь — иначе mid-persist fail безвозвратно теряет тик.
+    pendingEvents = [...events, ...pendingEvents];
+    pendingDeaths = [...deaths, ...pendingDeaths];
+    sim.requeueEpisodes(episodes);
+    sim.requeueNewSignals(newSignals);
+    sim.requeueResolvedSignals(resolvedSignals);
+    sim.requeueDecisionLogs(decisionLogs);
+    throw err;
   }
-  await updateWorldClock(pool, sim.currentTick, phase, sim.fishDensitySnapshot());
-  await notifyTick(pool, sim.currentTick, phase);
-  setPopulationGauges(sim);
 }
 
 async function loop(): Promise<void> {

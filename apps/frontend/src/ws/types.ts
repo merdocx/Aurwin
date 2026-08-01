@@ -67,6 +67,8 @@ export interface DeltaMessage {
   creatures: CreatureDto[];
   events: WorldEventDto[];
   fish_density?: Record<string, number>;
+  /** Полный состав живых — клиент удаляет id, которых нет в creatures. */
+  full_roster?: boolean;
 }
 
 export interface ErrorMessage {

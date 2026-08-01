@@ -358,13 +358,13 @@ export const Creature = memo(function Creature({
       <div
         data-facing
         style={{
+          // transform только императивно (ObservatoryWorld.applyFacing) —
+          // иначе meta-рендер сбрасывает facing на кадр.
           position: "relative",
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
           gap: 2,
-          transformOrigin: noseLed ? "0 0" : "50% 50%",
-          transform: noseLed ? headingTransform(facing, nose) : faceRight ? undefined : "scaleX(-1)",
         }}
       >
         <div

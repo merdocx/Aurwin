@@ -342,18 +342,21 @@ export interface QueuedReflectionRow {
   kind: ReflectionKind;
   merged_episode_ids: string[];
   request: unknown;
+  response: unknown | null;
+  status: "queued" | "sent";
   created_at: string;
 }
 
 /**
- * Все ещё не отправленные (или не дошедшие до конца) рефлексии — включая
- * "застрявшие" с предыдущих проходов, если Anthropic API был недоступен
- * (7.3, деградация): очередь копится в этой же таблице, а не теряется
- * вместе с процессом при рестарте воркера.
+ * Очередь к обработке: `queued` (ещё не звонили LLM) и `sent` (ответ сохранён,
+ * но apply не завершился — crash recovery без повторного LLM).
  */
 export async function fetchPendingQueuedReflections(pool: Pool): Promise<QueuedReflectionRow[]> {
   const result = await pool.query<QueuedReflectionRow>(
-    `SELECT id, creature_id, kind, merged_episode_ids, request, created_at FROM reflections WHERE status = 'queued' ORDER BY created_at ASC`,
+    `SELECT id, creature_id, kind, merged_episode_ids, request, response, status, created_at
+     FROM reflections
+     WHERE status IN ('queued', 'sent')
+     ORDER BY created_at ASC`,
   );
   return result.rows;
 }

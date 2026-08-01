@@ -205,6 +205,7 @@ export class WorldStore {
     creatures: CreatureDto[];
     events: WorldEventDto[];
     fish_density?: Record<string, number>;
+    full_roster?: boolean;
   }): void {
     this.tick = msg.tick;
     this.phase = msg.phase;
@@ -226,8 +227,10 @@ export class WorldStore {
     this.lastDeltaAt = now;
     const durationMs = this.interpDurationMs();
     let metaChanged = false;
+    const seenIds = new Set<string>();
 
     for (const dto of msg.creatures) {
+      seenIds.add(dto.id);
       const existing = this.creatures.get(dto.id);
       if (existing) {
         const prevDto = existing.dto;
@@ -266,6 +269,17 @@ export class WorldStore {
         this.creatures.set(dto.id, this.makeFrame(dto, now));
         metaChanged = true;
         this.dirtyMetaIds.add(dto.id);
+      }
+    }
+
+    // Полный roster: убрать призраков, если death-event был потерян.
+    if (msg.full_roster) {
+      for (const id of [...this.creatures.keys()]) {
+        if (!seenIds.has(id)) {
+          this.creatures.delete(id);
+          metaChanged = true;
+          this.dirtyMetaIds.add(id);
+        }
       }
     }
 

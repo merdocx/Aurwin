@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 
 export function Dialog({
   open,
@@ -11,6 +11,50 @@ export function Dialog({
   onClose: () => void;
   children: ReactNode;
 }) {
+  const titleId = useId();
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const previouslyFocused = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    previouslyFocused.current = document.activeElement as HTMLElement | null;
+    const panel = panelRef.current;
+    const focusables = () =>
+      panel
+        ? [...panel.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')].filter(
+            (el) => !el.hasAttribute("disabled"),
+          )
+        : [];
+    const first = focusables()[0];
+    first?.focus();
+
+    function onKeyDown(e: KeyboardEvent): void {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab" || !panel) return;
+      const list = focusables();
+      if (list.length === 0) return;
+      const firstEl = list[0];
+      const lastEl = list[list.length - 1];
+      if (e.shiftKey && document.activeElement === firstEl) {
+        e.preventDefault();
+        lastEl.focus();
+      } else if (!e.shiftKey && document.activeElement === lastEl) {
+        e.preventDefault();
+        firstEl.focus();
+      }
+    }
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      previouslyFocused.current?.focus?.();
+    };
+  }, [open, onClose]);
+
   if (!open) return null;
   return (
     <div
@@ -30,7 +74,11 @@ export function Dialog({
       onClick={onClose}
     >
       <div
+        ref={panelRef}
         className="ds-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
         onClick={(e) => e.stopPropagation()}
         style={{
           background: "var(--bg-surface)",
@@ -48,7 +96,9 @@ export function Dialog({
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-4)" }}>
-          <h2 style={{ fontSize: 18, fontWeight: 700, color: "var(--fg-primary)", margin: 0 }}>{title}</h2>
+          <h2 id={titleId} style={{ fontSize: 18, fontWeight: 700, color: "var(--fg-primary)", margin: 0 }}>
+            {title}
+          </h2>
           <button
             type="button"
             onClick={onClose}

@@ -973,3 +973,25 @@ THIRD_LAND, MEDIUM_SEEDS, SMALL_BERGS. Именованные зоны — мя�
    контакта не влияет (`resolveHunt` всегда caught).
 
 4. Separation-exemption для hunt-пар снят; радиусы = `body_radius_units`.
+
+## 2026-08-01 — аудит P0/P1/P2 (persistence, WS, UX)
+
+1. **`needsInsert` включает `reintroduction`** — light UPDATE не создаёт
+   строк; когорта после вымирания писалась только на полном снапшоте.
+2. **`bond_formed` / `bond_broken` → episodes** у обеих сторон (significance
+   из `episode_significance`), иначе event-рефлексии дружбы не ставились в
+   очередь.
+3. **`persistTick` requeue** — при ошибке mid-persist буферы events/deaths/
+   episodes/signals/decision_log возвращаются в очередь.
+4. **WS events cursor `(tick, id)`** + `broadcastAgain` при truncate LIMIT;
+   delta флаг `full_roster` — клиент prune'ит призраков без death-event.
+5. **Reflection `status=sent` recovery** — `fetchPending` подхватывает sent;
+   apply без повторного LLM.
+6. **Spatial rebuild** после движения и после soft separation.
+7. **NameGenerator.seedOccupied** после restore (+ имена умерших).
+8. **`continuous_starvation_real_hours`** (migration 018) в light/full upsert
+   и restore; light также пишет needs/skills/authority.
+9. **LOD** по `mountedIds` (>55) и scale, не по всей популяции genesis.
+10. **Facing / PanZoom** transform только императивно (как позиция спрайтов).
+11. **CSP** разрешает Google Fonts; Dialog/Tabs a11y; README синхронизирован
+    с фазой 7.

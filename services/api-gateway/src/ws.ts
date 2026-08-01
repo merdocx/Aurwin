@@ -78,13 +78,20 @@ class GatewayHub {
   private readonly clients = new Set<ClientState>();
   private readonly limiter: WsConnectionLimiter;
   private readonly constants: GatewayConstants;
-  private lastBroadcastTick = 0;
+  /** Последний отправленный clock.tick (для dedup creature delta). */
+  private lastClockTick = 0;
+  /** Курсор world_events: (tick, id), чтобы truncate LIMIT не терял хвост. */
+  private lastEventTick = 0;
+  private lastEventId = "00000000-0000-0000-0000-000000000000";
   private idleTimer?: NodeJS.Timeout;
   private broadcastTimer?: NodeJS.Timeout;
   private listenClient?: Client;
   /** Последние отпечатки существ — sparse delta шлёт только изменившихся. */
   private lastFingerprints = new Map<string, string>();
   private sparseTickCounter = 0;
+  private broadcastInFlight = false;
+  /** Пока in-flight пришёл ещё один NOTIFY/interval — повторить после. */
+  private broadcastAgain = false;
 
   constructor(
     private readonly pool: Pool,
@@ -223,7 +230,7 @@ class GatewayHub {
   private async sendSnapshot(state: ClientState): Promise<void> {
     try {
       const [clock, creatures] = await Promise.all([getWorldClock(this.pool), getAliveCreaturesLight(this.pool)]);
-      this.lastBroadcastTick = Math.max(this.lastBroadcastTick, clock.tick);
+      this.lastClockTick = Math.max(this.lastClockTick, clock.tick);
       const dto = creatures.map((c) => creatureDto(c, clock.tick, this.constants.time.visual_tick_seconds));
       if (state.ws.readyState === WebSocket.OPEN) {
         state.ws.send(
@@ -247,21 +254,43 @@ class GatewayHub {
   }
 
   /** Общий для ВСЕХ клиентов запрос к БД раз в тик; один payload на всех клиентов. */
-  private broadcastInFlight = false;
-
   async broadcastTick(): Promise<void> {
     if (this.clients.size === 0) return;
-    if (this.broadcastInFlight) return;
+    if (this.broadcastInFlight) {
+      this.broadcastAgain = true;
+      return;
+    }
     this.broadcastInFlight = true;
+    try {
+      do {
+        this.broadcastAgain = false;
+        await this.broadcastOnce();
+      } while (this.broadcastAgain && this.clients.size > 0);
+    } finally {
+      this.broadcastInFlight = false;
+    }
+  }
+
+  private async broadcastOnce(): Promise<void> {
+    const EVENT_LIMIT = 500;
     try {
       const [clock, creatures, events] = await Promise.all([
         getWorldClock(this.pool),
         getAliveCreaturesLight(this.pool),
-        getWorldEventsSinceTick(this.pool, this.lastBroadcastTick),
+        getWorldEventsSinceTick(this.pool, this.lastEventTick, { sinceId: this.lastEventId, limit: EVENT_LIMIT }),
       ]);
-      // Dedup: NOTIFY + interval могут совпасть на одном tick.
-      if (clock.tick === this.lastBroadcastTick && events.length === 0) return;
-      this.lastBroadcastTick = clock.tick;
+      // Dedup: NOTIFY + interval могут совпасть на одном tick без новых events.
+      if (clock.tick === this.lastClockTick && events.length === 0) return;
+
+      if (events.length > 0) {
+        const last = events[events.length - 1];
+        this.lastEventTick = Number(last.tick);
+        this.lastEventId = last.id;
+      }
+      if (events.length >= EVENT_LIMIT) {
+        this.broadcastAgain = true;
+      }
+      this.lastClockTick = Math.max(this.lastClockTick, clock.tick);
 
       const eventDtos = events.map((e) => ({
         id: e.id,
@@ -295,6 +324,7 @@ class GatewayHub {
         creatures: creatureDtos,
         events: eventDtos,
         fish_density: clock.fishDensity,
+        full_roster: forceFull,
       });
 
       for (const state of this.clients) {
@@ -303,8 +333,6 @@ class GatewayHub {
       }
     } catch (err) {
       console.error("[api-gateway] ошибка broadcastTick:", err);
-    } finally {
-      this.broadcastInFlight = false;
     }
   }
 }

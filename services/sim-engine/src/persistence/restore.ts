@@ -58,7 +58,7 @@ export async function loadWorldState(pool: Pool): Promise<RestoredWorldState & {
     SELECT id, species, name, sex, born_at_tick, parent_a, parent_b, pos_x, pos_y, zone,
            traits, traits_birth, needs, emotion, intentions, narrative, narrative_facts,
            skills, chronotype, is_asleep, activity, authority, habits, weights, weights_birth,
-           last_reflection_at, last_reproduced_at_tick
+           last_reflection_at, last_reproduced_at_tick, continuous_starvation_real_hours
     FROM creatures WHERE died_at_tick IS NULL
   `);
 
@@ -94,7 +94,7 @@ export async function loadWorldState(pool: Pool): Promise<RestoredWorldState & {
       weightsBirth: row.weights_birth,
       lastReflectionAt: Number(row.last_reflection_at ?? tick),
       lastReproducedAtTick: row.last_reproduced_at_tick != null ? Number(row.last_reproduced_at_tick) : undefined,
-      continuousStarvationRealHours: 0,
+      continuousStarvationRealHours: Number(row.continuous_starvation_real_hours ?? 0),
       awakeSinceTick: tick,
       episodes: [],
       perceivedStates: new Map(),
@@ -224,5 +224,13 @@ export async function loadWorldState(pool: Pool): Promise<RestoredWorldState & {
     strength: row.strength,
   }));
 
-  return { tick, phase, creatures, bonds, aversions, fishDensity };
+  const deadNamesResult = await pool.query<{ name: string; species: "penguin" | "orca" }>(
+    `SELECT name, species FROM creatures
+     WHERE died_at_tick IS NOT NULL
+     ORDER BY died_at_tick DESC NULLS LAST
+     LIMIT 400`,
+  );
+  const occupiedNames = deadNamesResult.rows.map((row) => ({ name: row.name, species: row.species }));
+
+  return { tick, phase, creatures, bonds, aversions, fishDensity, occupiedNames };
 }

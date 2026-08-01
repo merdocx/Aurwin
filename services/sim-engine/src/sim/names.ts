@@ -44,16 +44,43 @@ const DICTIONARIES = { penguin: PENGUIN_NAMES, orca: ORCA_NAMES } as const;
 /**
  * Выдаёт имена по порядку из словаря вида; после исчерпания добавляет
  * числовой суффикс и продолжает цикл по словарю (А.5).
+ * После restore нужно вызвать seedOccupied, иначе счётчики с нуля
+ * повторят уже занятые имена.
  */
 export class NameGenerator {
   private counters = new Map<"penguin" | "orca", number>();
+  private occupied = new Set<string>();
+
+  /** Пометить уже живущие (и недавние) имена занятыми; сдвинуть counters. */
+  seedOccupied(entries: Array<{ name: string; species: "penguin" | "orca" }>): void {
+    for (const { name, species } of entries) {
+      this.occupied.add(name);
+      const dict = DICTIONARIES[species];
+      const idx = dict.indexOf(name);
+      if (idx >= 0) {
+        const cur = this.counters.get(species) ?? 0;
+        if (idx + 1 > cur) this.counters.set(species, idx + 1);
+      }
+      // Суффиксные имена вида «Пика-2» — только в occupied.
+    }
+  }
 
   nameFor(species: "penguin" | "orca"): string {
     const dict = DICTIONARIES[species];
-    const index = this.counters.get(species) ?? 0;
-    this.counters.set(species, index + 1);
-    const base = dict[index % dict.length];
-    const cycle = Math.floor(index / dict.length);
-    return cycle === 0 ? base : `${base}-${cycle + 1}`;
+    for (let guard = 0; guard < dict.length * 20; guard++) {
+      const index = this.counters.get(species) ?? 0;
+      this.counters.set(species, index + 1);
+      const base = dict[index % dict.length];
+      const cycle = Math.floor(index / dict.length);
+      const candidate = cycle === 0 ? base : `${base}-${cycle + 1}`;
+      if (!this.occupied.has(candidate)) {
+        this.occupied.add(candidate);
+        return candidate;
+      }
+    }
+    // Крайний случай: уникальный суффикс от счётчика.
+    const fallback = `${dict[0]}-${Date.now()}`;
+    this.occupied.add(fallback);
+    return fallback;
   }
 }

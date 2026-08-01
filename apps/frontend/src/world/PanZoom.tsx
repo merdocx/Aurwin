@@ -288,12 +288,13 @@ export const PanZoom = forwardRef<PanZoomHandle, Props>(function PanZoom({ width
       <div
         ref={layerRef}
         style={{
+          // Live pan/zoom — только el.style.transform (applyLayer). React style
+          // здесь сбрасывал бы карту при setState родителя во время drag.
           position: "absolute",
           top: 0,
           left: 0,
           width,
           height,
-          transform: `translate(${t.x}px,${t.y}px) scale(${t.scale})`,
           transformOrigin: "0 0",
           transition: transitioning ? "transform 0.32s var(--ease-standard)" : "none",
           willChange: "transform",

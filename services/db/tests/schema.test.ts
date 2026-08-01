@@ -45,6 +45,9 @@ const CREATURES_COLUMNS = [
   "weights",
   "weights_birth",
   "last_reflection_at",
+  "activity",
+  "last_reproduced_at_tick",
+  "continuous_starvation_real_hours",
 ];
 
 async function columnsOf(table: string): Promise<Set<string>> {

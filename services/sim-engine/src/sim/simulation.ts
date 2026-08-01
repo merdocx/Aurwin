@@ -91,6 +91,8 @@ export interface RestoredWorldState {
   bonds: BondRecord[];
   aversions: AversionRecord[];
   fishDensity?: FishDensitySnapshot;
+  /** Имена умерших (для NameGenerator после restore). */
+  occupiedNames?: Array<{ name: string; species: Creature["species"] }>;
 }
 
 /** Метрики, накапливаемые по ходу симуляции — потребляются CLI-отчётом (task 12/13). */
@@ -186,6 +188,10 @@ export class Simulation {
       for (const creature of restore.creatures) this.creatures.set(creature.id, creature);
       for (const bond of restore.bonds) this.bonds.set(bondKey(bond.creatureA, bond.creatureB), bond);
       for (const aversion of restore.aversions) this.aversions.set(aversionKey(aversion.subjectId, aversion.objectId), aversion);
+      this.nameGen.seedOccupied([
+        ...restore.creatures.map((c) => ({ name: c.name, species: c.species })),
+        ...(restore.occupiedNames ?? []),
+      ]);
     } else {
       const population = createGenesisPopulation(0, this.rng, this.nameGen, this.nextId);
       for (const creature of population) this.creatures.set(creature.id, creature);
@@ -219,11 +225,22 @@ export class Simulation {
     return batch;
   }
 
+  /** Возврат в буфер после сбоя persist (не терять тик). */
+  requeueEpisodes(batch: Episode[]): void {
+    if (batch.length === 0) return;
+    this.episodesThisTick = [...batch, ...this.episodesThisTick];
+  }
+
   /** Новые сигналы для INSERT в Postgres (А.2 `signals`). */
   drainNewSignals(): SignalRecord[] {
     const batch = this.signalsCreatedThisTick;
     this.signalsCreatedThisTick = [];
     return batch;
+  }
+
+  requeueNewSignals(batch: SignalRecord[]): void {
+    if (batch.length === 0) return;
+    this.signalsCreatedThisTick = [...batch, ...this.signalsCreatedThisTick];
   }
 
   /** Сигналы с обновлённым outcome для UPDATE в Postgres. */
@@ -233,11 +250,21 @@ export class Simulation {
     return batch;
   }
 
+  requeueResolvedSignals(batch: SignalRecord[]): void {
+    if (batch.length === 0) return;
+    this.signalsResolvedThisTick = [...batch, ...this.signalsResolvedThisTick];
+  }
+
   /** Сэмплированные решения для INSERT в `decision_log` (А.2, семплинг А.2/А.9). */
   drainDecisionLogs(): DecisionLogEntry[] {
     const batch = this.decisionLogsThisTick;
     this.decisionLogsThisTick = [];
     return batch;
+  }
+
+  requeueDecisionLogs(batch: DecisionLogEntry[]): void {
+    if (batch.length === 0) return;
+    this.decisionLogsThisTick = [...batch, ...this.decisionLogsThisTick];
   }
 
   private trackCreatedSignal(record: SignalRecord): void {
@@ -712,6 +739,9 @@ export class Simulation {
       creature.lastAction = decision.action;
     }
 
+    // Позиции после движения — для hunt/witness/alarm и separation.
+    this.spatialIndex.rebuild(alive.filter(isAlive).map((c) => ({ id: c.id, x: c.pos.x, y: c.pos.y })));
+
     // Удача до контакта: group/guard оттесняют жертву; coordinate отменяет.
     const broken = applyPreContactDefense(
       alive.filter(isAlive),
@@ -767,6 +797,8 @@ export class Simulation {
       bounds,
       this.spatialIndex,
     );
+    // Separation сдвинул позиции — обновить индекс для detectEvents/свидетелей.
+    this.spatialIndex.rebuild(alive.filter(isAlive).map((c) => ({ id: c.id, x: c.pos.x, y: c.pos.y })));
   }
 
   private resolveHuntAttempt(
@@ -1067,6 +1099,13 @@ export class Simulation {
         touched.add(key);
         if (before < getSimConstants().social.friendship.threshold && record.strength >= getSimConstants().social.friendship.threshold) {
           this.emitWorldEvent({ tick: this.tick_, type: "bond_formed", actorId: creature.id, targetId: other.id, zone: creature.zone, payload: {} });
+          const sig = getSimConstants().episode_significance.bond_formed;
+          this.episodesThisTick.push(
+            recordEpisode(creature, this.tick_, { type: "bond_formed", participants: [other.id], significance: sig, zone: creature.zone }, this.nextId),
+          );
+          this.episodesThisTick.push(
+            recordEpisode(other, this.tick_, { type: "bond_formed", participants: [creature.id], significance: sig, zone: other.zone }, this.nextId),
+          );
           const transmitted = transmitOnBondFormed(creature, other, this.tick_, this.nextId);
           if (transmitted) this.episodesThisTick.push(transmitted);
         }
@@ -1075,6 +1114,19 @@ export class Simulation {
     const broken = decayUntouchedBonds(this.bonds, touched);
     for (const record of broken) {
       this.emitWorldEvent({ tick: this.tick_, type: "bond_broken", actorId: record.creatureA, targetId: record.creatureB, payload: {} });
+      const a = this.creatures.get(record.creatureA);
+      const b = this.creatures.get(record.creatureB);
+      const breakSig = getSimConstants().episode_significance.bond_broken;
+      if (a && isAlive(a)) {
+        this.episodesThisTick.push(
+          recordEpisode(a, this.tick_, { type: "bond_broken", participants: [record.creatureB], significance: breakSig, zone: a.zone }, this.nextId),
+        );
+      }
+      if (b && isAlive(b)) {
+        this.episodesThisTick.push(
+          recordEpisode(b, this.tick_, { type: "bond_broken", participants: [record.creatureA], significance: breakSig, zone: b.zone }, this.nextId),
+        );
+      }
       if (record.kind === "mate") {
         this.emitWorldEvent({ tick: this.tick_, type: "mate_breakup", actorId: record.creatureA, targetId: record.creatureB, payload: {} });
       }

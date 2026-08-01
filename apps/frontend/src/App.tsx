@@ -7,7 +7,7 @@ import { fetchWorldStats, type WorldStats } from "./api/client";
 import { Tabs } from "./ds/Tabs";
 import { Dialog } from "./ds/Dialog";
 import { EmotionIndicator, type EmotionKind } from "./ds/EmotionIndicator";
-import { IconButton, MoonIcon, SunIcon } from "./ds/IconButton";
+import { MoonIcon, SunIcon } from "./ds/IconButton";
 import { formatWorldAge } from "./world/worldAge";
 
 const EMOTION_LEGEND: Array<{ emotion: EmotionKind; label: string }> = [
@@ -75,7 +75,7 @@ export function App() {
     <div className="observatory" data-theme={phase === "night" ? "night" : "day"}>
       <header className="observatory__header">
         <div className="observatory__header-left">
-          <span className="observatory__brand">Aurwin</span>
+          <h1 className="observatory__brand">Aurwin</h1>
           <Tabs
             value={tab}
             onChange={(v) => setTab(v as "world" | "social")}
@@ -91,12 +91,32 @@ export function App() {
               {ageLabel} · {penguins} пингвинов · {orcas} касаток
             </span>
             <span className="observatory__meta-hint">
-              {status === "open" ? phaseHint : status === "connecting" ? "подключение к миру…" : "связь восстанавливается…"}
+              {status === "open"
+                ? phaseHint
+                : status === "connecting"
+                  ? "подключение к миру…"
+                  : status === "rejected"
+                    ? errorMessage ?? "мир сейчас недоступен, попробуйте позже"
+                    : "связь восстанавливается…"}
             </span>
           </div>
-          <IconButton label={phase === "night" ? "Сейчас ночь" : "Сейчас день"} active>
+          <div
+            role="status"
+            aria-label={phase === "night" ? "Сейчас ночь" : "Сейчас день"}
+            title={phase === "night" ? "Сейчас ночь" : "Сейчас день"}
+            className="observatory__phase-badge"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 36,
+              height: 36,
+              borderRadius: "var(--radius-m)",
+              color: "var(--fg-secondary)",
+            }}
+          >
             {phase === "night" ? <MoonIcon /> : <SunIcon />}
-          </IconButton>
+          </div>
         </div>
       </header>
 

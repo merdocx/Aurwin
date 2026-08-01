@@ -58,11 +58,20 @@ export interface WorldEventRow {
   created_at: string;
 }
 
-export async function getWorldEventsSinceTick(pool: Pool, sinceTick: number, limit = 500): Promise<WorldEventRow[]> {
+export async function getWorldEventsSinceTick(
+  pool: Pool,
+  sinceTick: number,
+  opts: { sinceId?: string; limit?: number } = {},
+): Promise<WorldEventRow[]> {
+  const limit = opts.limit ?? 500;
+  const sinceId = opts.sinceId ?? "00000000-0000-0000-0000-000000000000";
   const result = await pool.query<WorldEventRow>(
     `SELECT id, tick, type, actor_id, target_id, zone, payload, created_at
-     FROM world_events WHERE tick > $1 ORDER BY tick ASC LIMIT $2`,
-    [sinceTick, limit],
+     FROM world_events
+     WHERE tick > $1 OR (tick = $1 AND id > $2::uuid)
+     ORDER BY tick ASC, id ASC
+     LIMIT $3`,
+    [sinceTick, sinceId, limit],
   );
   return result.rows;
 }
