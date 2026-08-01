@@ -53,6 +53,43 @@ body,
   font-weight: inherit;
 }
 
+.observatory__about-btn {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--fg-secondary);
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-m);
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: color 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.observatory__about-btn:hover {
+  color: var(--fg-primary);
+  border-color: var(--border-strong, var(--border-subtle));
+  background: color-mix(in oklch, var(--bg-elevated, var(--bg-surface)) 80%, transparent);
+}
+
+.observatory__about-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--fg-secondary);
+}
+
+.observatory__about-body p {
+  margin: 0;
+}
+
+.observatory__about-body strong {
+  color: var(--fg-primary);
+  font-weight: 600;
+}
+
 .observatory__header-right {
   display: flex;
   gap: 12px;

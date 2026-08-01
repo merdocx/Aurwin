@@ -14,10 +14,22 @@ export function Dialog({
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement | null>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const wasOpen = useRef(false);
 
   useEffect(() => {
-    if (!open) return;
-    previouslyFocused.current = document.activeElement as HTMLElement | null;
+    if (!open) {
+      if (wasOpen.current) {
+        previouslyFocused.current?.focus?.();
+        wasOpen.current = false;
+      }
+      return;
+    }
+
+    const justOpened = !wasOpen.current;
+    wasOpen.current = true;
+
     const panel = panelRef.current;
     const focusables = () =>
       panel
@@ -25,13 +37,18 @@ export function Dialog({
             (el) => !el.hasAttribute("disabled"),
           )
         : [];
-    const first = focusables()[0];
-    first?.focus();
+
+    // Фокус только при открытии — иначе каждый ре-рендер родителя (тик WS)
+    // сбрасывает scrollTop диалога наверх к кнопке «×».
+    if (justOpened) {
+      previouslyFocused.current = document.activeElement as HTMLElement | null;
+      focusables()[0]?.focus();
+    }
 
     function onKeyDown(e: KeyboardEvent): void {
       if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== "Tab" || !panel) return;
@@ -51,9 +68,8 @@ export function Dialog({
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      previouslyFocused.current?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
   return (
@@ -71,7 +87,7 @@ export function Dialog({
         animation: "aur-fade-in var(--duration-base) var(--ease-out)",
         padding: 16,
       }}
-      onClick={onClose}
+      onClick={() => onCloseRef.current()}
     >
       <div
         ref={panelRef}
@@ -101,7 +117,7 @@ export function Dialog({
           </h2>
           <button
             type="button"
-            onClick={onClose}
+            onClick={() => onCloseRef.current()}
             aria-label="Закрыть"
             style={{ border: "none", background: "none", cursor: "pointer", fontSize: 18, color: "var(--fg-tertiary)" }}
           >

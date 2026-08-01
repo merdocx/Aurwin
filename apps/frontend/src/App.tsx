@@ -25,6 +25,7 @@ export function App() {
   const [tab, setTab] = useState<"world" | "social">("world");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedName, setSelectedName] = useState("");
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [stats, setStats] = useState<WorldStats | null>(null);
   const [hintVisible, setHintVisible] = useState(() => {
     try {
@@ -71,11 +72,21 @@ export function App() {
     [store],
   );
 
+  const closeCreatureCard = useCallback(() => {
+    setSelectedId(null);
+    setSelectedName("");
+  }, []);
+
+  const closeAbout = useCallback(() => setAboutOpen(false), []);
+
   return (
     <div className="observatory" data-theme={phase === "night" ? "night" : "day"}>
       <header className="observatory__header">
         <div className="observatory__header-left">
           <h1 className="observatory__brand">Aurwin</h1>
+          <button type="button" className="observatory__about-btn" onClick={() => setAboutOpen(true)}>
+            Что это
+          </button>
           <Tabs
             value={tab}
             onChange={(v) => setTab(v as "world" | "social")}
@@ -153,20 +164,30 @@ export function App() {
 
       {errorMessage && <div className="observatory__error">{errorMessage}</div>}
 
-      <Dialog
-        open={!!selectedId}
-        title={selectedName || "Существо"}
-        onClose={() => {
-          setSelectedId(null);
-          setSelectedName("");
-        }}
-      >
+      <Dialog open={!!selectedId} title={selectedName || "Существо"} onClose={closeCreatureCard}>
         {selectedId && (
-          <CreatureCardPanel
-            creatureId={selectedId}
-            onName={(name) => setSelectedName(name)}
-          />
+          <CreatureCardPanel creatureId={selectedId} onName={(name) => setSelectedName(name)} />
         )}
+      </Dialog>
+
+      <Dialog open={aboutOpen} title="Что это" onClose={closeAbout}>
+        <div className="observatory__about-body">
+          <p>
+            <strong>Aurwin</strong> — живой арктический мир, который идёт непрерывно. На льду и в воде живут пингвины и
+            касатки: они кормятся, спят, дружат, охотятся и оставляют следы своей истории.
+          </p>
+          <p>
+            У каждого животного — <strong>собственная личность</strong>: смелость, осторожность, любопытство и другие
+            черты. Они не играют по жёсткому сценарию. Есть врождённые инстинкты, а поверх них —{" "}
+            <strong>самообучение</strong>: привычки к зонам, навыки, память о пережитом.
+          </p>
+          <p>
+            Иногда животное «задумывается» — это слой <strong>самосознания</strong>: оно пересматривает свою историю,
+            чуть меняет характер и ставит себе намерения. Так у колонии появляется настоящая внутренняя жизнь, а не
+            декоративная анимация.
+          </p>
+          <p>Кликните на существо на карте, чтобы открыть карточку и узнать, кто оно и что с ним происходило.</p>
+        </div>
       </Dialog>
     </div>
   );
