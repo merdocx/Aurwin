@@ -14,6 +14,7 @@ const REQUIRED_TABLES = [
   "reflections",
   "world_events",
   "decision_log",
+  "learning_events",
 ];
 
 const CREATURES_COLUMNS = [

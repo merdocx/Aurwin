@@ -8,7 +8,7 @@ import { resetSocialGraphCache } from "../src/rest.js";
 /**
  * Гейт фазы 5 (docs/AURWIN_TZ.md, задача фазы 5):
  *   - narrative отсутствует в ответах публичных эндпоинтов;
- *   - rate-limit срабатывает (REST 60/мин/IP, WS 3 соединения/IP — А.6).
+ *   - rate-limit срабатывает (REST 60/мин/IP; WS per-IP с вытеснением старых).
  * Использует общий эфемерный Postgres (tests/setup/global-db-setup.ts), как
  * и services/db/tests/*.
  */
@@ -64,8 +64,16 @@ describe("api-gateway: narrative никогда не отдаётся публи
     const secret = "ПОЛНЫЙ ВНУТРЕННИЙ ДНЕВНИК — НЕ ДЛЯ НАБЛЮДАТЕЛЯ";
     const id = await insertCreature(pool, { species: "penguin", name: "Тестовый пингвин" });
     await pool.query(
-      `UPDATE creatures SET narrative = $2, narrative_facts = $3, zone = 'main_ice', pos_x = 10, pos_y = 20 WHERE id = $1`,
-      [id, secret, JSON.stringify(["вылупился на льду", "подружился с соседом"])],
+      `UPDATE creatures
+       SET narrative = $2, narrative_facts = $3, intentions = $4, habits = $5, zone = 'main_ice', pos_x = 10, pos_y = 20
+       WHERE id = $1`,
+      [
+        id,
+        secret,
+        JSON.stringify(["вылупился на льду", "подружился с соседом"]),
+        JSON.stringify([{ text: "держаться рядом с колонией", effect: { zone_bonus: { main_ice: 0.2 } } }]),
+        JSON.stringify({ main_ice: 0.7, open_water: -0.4 }),
+      ],
     );
 
     const { server, baseUrl } = await startServer(pool);
@@ -80,6 +88,8 @@ describe("api-gateway: narrative никогда не отдаётся публи
     const body = JSON.parse(rawText);
     expect(containsNarrativeKey(body)).toBe(false);
     expect(body.narrative_facts).toEqual(["вылупился на льду", "подружился с соседом"]);
+    expect(body.intentions).toEqual([{ text: "держаться рядом с колонией", effect: { zone_bonus: { main_ice: 0.2 } } }]);
+    expect(body.habits).toEqual({ main_ice: 0.7, open_water: -0.4 });
     expect(body.name).toBe("Тестовый пингвин");
   });
 
@@ -140,7 +150,7 @@ describe("api-gateway: rate limit (А.6)", () => {
     expect(statuses[60]).toBe(429);
   }, 20_000);
 
-  it("не более 3 одновременных WS-соединений с одного IP — 4-е получает graceful-отказ", async () => {
+  it("при переполнении per-IP новое WS вытесняет самое старое, а не получает отказ", async () => {
     const pool = getTestPool();
     const { server, baseUrl } = await startServer(pool);
     activeServer = server;
@@ -156,22 +166,18 @@ describe("api-gateway: rate limit (А.6)", () => {
       return ws;
     }
 
-    const first = await connect();
-    const second = await connect();
-    const third = await connect();
-    expect(first.readyState).toBe(WebSocket.OPEN);
-    expect(second.readyState).toBe(WebSocket.OPEN);
-    expect(third.readyState).toBe(WebSocket.OPEN);
+    // constants.yaml: ws_max_connections_per_ip = 8
+    const sockets: WebSocket[] = [];
+    for (let i = 0; i < 8; i++) sockets.push(await connect());
+    expect(sockets.every((s) => s.readyState === WebSocket.OPEN)).toBe(true);
 
-    const fourth = new WebSocket(wsUrl);
-    activeSockets.push(fourth);
-    const fourthClosedCode = await new Promise<number>((resolve, reject) => {
-      fourth.once("close", (code) => resolve(code));
-      fourth.once("error", () => {
-        /* сервер может закрыть до 'open' в некоторых окружениях — фиксируем через close */
-      });
-      setTimeout(() => reject(new Error("4-е соединение не было закрыто вовремя")), 5000);
+    const oldestClosed = new Promise<number>((resolve) => {
+      sockets[0].once("close", (code) => resolve(code));
     });
-    expect(fourthClosedCode).toBe(1013);
-  }, 20_000);
+
+    const newer = await connect();
+    expect(newer.readyState).toBe(WebSocket.OPEN);
+    // Вытеснение — обычное закрытие 1000, не 1013 over capacity.
+    await expect(oldestClosed).resolves.toBe(1000);
+  }, 30_000);
 });

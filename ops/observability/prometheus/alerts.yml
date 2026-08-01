@@ -24,23 +24,23 @@ groups:
           description: "aurwin_last_tick_timestamp_seconds не обновляется > 120с — sim-engine мог упасть, зависнуть на записи в БД или потерять соединение с Postgres."
 
       - alert: AurwinPenguinPopulationOutOfRange
-        # constants.yaml: population.alert_thresholds.penguins = {min: 10, max: 120}
-        expr: aurwin_population{species="penguin"} < 10 or aurwin_population{species="penguin"} > 120
+        # constants.yaml: population.alert_thresholds.penguins = {min: 5, max: 60}
+        expr: aurwin_population{species="penguin"} < 5 or aurwin_population{species="penguin"} > 60
         for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "Численность пингвинов вне диапазона 10-120 (А.9)"
-          description: "Текущее значение: {{ $value }}. < 10 — угроза вымирания вида (7.4, реинтродукция при 0); > 120 — разбалансировка ёмкости среды (респавн рыбы, летальность охоты)."
+          summary: "Численность пингвинов вне диапазона 5-60 (А.9)"
+          description: "Текущее значение: {{ $value }}. < 5 — угроза вымирания вида (7.4, реинтродукция при 0); > 60 — разбалансировка ёмкости среды (респавн рыбы, летальность охоты)."
 
       - alert: AurwinOrcaPopulationOutOfRange
-        # constants.yaml: population.alert_thresholds.orcas = {min: 2, max: 12}
-        expr: aurwin_population{species="orca"} < 2 or aurwin_population{species="orca"} > 12
+        # constants.yaml: population.alert_thresholds.orcas = {min: 1, max: 6}
+        expr: aurwin_population{species="orca"} < 1 or aurwin_population{species="orca"} > 6
         for: 2m
         labels:
           severity: warning
         annotations:
-          summary: "Численность касаток вне диапазона 2-12 (А.9)"
+          summary: "Численность касаток вне диапазона 1-6 (А.9)"
           description: "Текущее значение: {{ $value }}. Видоспецифичный порог (А.7) — общий порог '< 5' ложно срабатывал бы на нормальном диапазоне касаток."
 
       - alert: AurwinLlmErrorRateHigh

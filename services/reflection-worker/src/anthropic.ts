@@ -1,4 +1,5 @@
 import { getConstants } from "./constants.js";
+import { EVENT_SONNET_TRIGGER_TYPES } from "./db.js";
 import { buildSystemPrompt } from "./prompt.js";
 import type { ReflectionKind } from "./types.js";
 
@@ -87,6 +88,10 @@ function headers(): Record<string, string> {
     "content-type": "application/json",
     "x-api-key": apiKey(),
     "anthropic-version": ANTHROPIC_VERSION,
+    // Prompt caching (7.5): beta-заголовок нужен для стабильной активации
+    // cache_control на Messages и Message Batches API; без него на Batch
+    // cache_*_tokens иногда оставались 0 (ops/DEVIATIONS.md, фаза 6).
+    "anthropic-beta": "prompt-caching-2024-07-31",
   };
 }
 
@@ -94,7 +99,9 @@ function headers(): Record<string, string> {
  * Системный блок с cache_control: ephemeral (7.5, "промпт-кэширование
  * общей системной части") — одинаков для всех вызовов ОДНОЙ модели, снижает
  * стоимость входных токенов повторяющегося префикса при последующих вызовах
- * в течение TTL кэша Anthropic.
+ * в течение TTL кэша Anthropic. Тот же блок передаётся и в createBatch
+ * (params.system) — Batch API поддерживает prompt caching; cache_control
+ * обязателен на общем system-блоке, иначе кэш не создаётся.
  */
 function systemBlock(): Array<{ type: "text"; text: string; cache_control: { type: "ephemeral" } }> {
   return [{ type: "text", text: buildSystemPrompt(), cache_control: { type: "ephemeral" } }];
@@ -206,8 +213,33 @@ export function modelFor(kind: ReflectionKind): string {
   return getConstants().reflection.models[kind];
 }
 
-export function estimateCostUsd(model: string, inputTokens: number, outputTokens: number): number {
+/**
+ * Модель для событийной рефлексии: Sonnet для вех/потерь/bonds; Haiku для
+ * частых birth/hunt_success. Если в слитом окне есть хотя бы один
+ * Sonnet-триггер — берём Sonnet (качество важнее экономии на смеси).
+ */
+export function modelForEvent(episodeTypes: readonly string[]): string {
+  const sonnetTriggers: readonly string[] = EVENT_SONNET_TRIGGER_TYPES;
+  if (episodeTypes.some((t) => sonnetTriggers.includes(t))) {
+    return getConstants().reflection.models.event;
+  }
+  return getConstants().reflection.models.background;
+}
+
+/**
+ * Оценка стоимости вызова для метрик (не биллинг Anthropic).
+ * @param batch — true для Message Batches API: Anthropic даёт ~50% скидку
+ *   относительно list-цены (7.6); без множителя метрики завышали фон.
+ */
+export function estimateCostUsd(
+  model: string,
+  inputTokens: number,
+  outputTokens: number,
+  options?: { batch?: boolean },
+): number {
   const pricing = getConstants().reflection.model_pricing_usd_per_million_tokens[model];
   if (!pricing) return 0;
-  return (inputTokens * pricing.input + outputTokens * pricing.output) / 1_000_000;
+  const list = (inputTokens * pricing.input + outputTokens * pricing.output) / 1_000_000;
+  // Batch API ≈ 0.5× list price (Anthropic Message Batches, ТЗ 7.6).
+  return options?.batch ? list * 0.5 : list;
 }

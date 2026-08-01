@@ -79,6 +79,19 @@ describe("apply.ts: применение к Postgres — discard при смер
 
     const reflectionRow = await pool.query(`SELECT status FROM reflections WHERE id = $1`, [reflectionId]);
     expect(reflectionRow.rows[0].status).toBe("applied");
+
+    const history = await pool.query(
+      `SELECT source, traits FROM trait_history WHERE creature_id = $1 AND source = 'reflection' ORDER BY tick`,
+      [creatureId],
+    );
+    expect(history.rowCount).toBe(1);
+    expect(history.rows[0].traits.courage).toBeCloseTo(0.08, 6);
+
+    const learning = await pool.query(
+      `SELECT kind FROM learning_events WHERE creature_id = $1 ORDER BY kind`,
+      [creatureId],
+    );
+    expect(learning.rows.map((r) => r.kind)).toEqual(["reflection_applied", "trait_delta"]);
   });
 
   it("существо УМЕРЛО между отправкой запроса и ответом: результат отбрасывается, но narrative сохраняется как «последняя мысль»", async () => {

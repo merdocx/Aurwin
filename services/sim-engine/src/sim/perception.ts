@@ -4,10 +4,25 @@ import { perceptionRadius, type Phase } from "../world/dayNight.js";
 import { getSimConstants } from "./simConstants.js";
 import { ageStageFor, ageWeeksAt } from "./lifecycle.js";
 import { trueVigor } from "./vigor.js";
+import { applyEmotionDelta, EMOTION_DELTAS } from "./emotion.js";
 import type { Creature } from "./types.js";
 
-export function perceptionRadiusFor(creature: Creature, phase: Phase): number {
+/**
+ * Дальность зрения (диск, без FOV-конуса): день/ночь + множитель сна.
+ * Единая точка для sense / flee / hunt / witnesses / display_vigor.
+ */
+export function visionRange(creature: Creature, phase: Phase): number {
   return perceptionRadius(creature.species, phase, creature.isAsleep);
+}
+
+/** @deprecated alias — предпочитай visionRange */
+export const perceptionRadiusFor = visionRange;
+
+/**
+ * Дальность слуха (alarm_call / пробуждение) — диск, не зависит от суток/сна.
+ */
+export function hearingRange(creature: Creature): number {
+  return getSimConstants().day_night.hearing_radius[creature.species];
 }
 
 /**
@@ -16,7 +31,7 @@ export function perceptionRadiusFor(creature: Creature, phase: Phase): number {
  * БАЗОВУЮ запись в perceivedStates для впервые увиденных субъектов —
  * "по умолчанию приблизительна (шум восприятия)" (7.8.1). Существующие
  * записи (уже сдвинутые сигналами) здесь не перезаписываются — их меняют
- * resolveActions() (сигналы) и decayPerceivedStates() (затухание).
+ * reinforceVisiblePredatorThreat / resolveHunt / decayPerceivedStates.
  */
 export function sense(
   observer: Creature,
@@ -26,9 +41,10 @@ export function sense(
   currentTick: number,
   rng: Rng,
 ): Creature[] {
-  const radius = perceptionRadiusFor(observer, phase);
+  const radius = visionRange(observer, phase);
   const nearby = spatialIndex.queryRadius(observer.pos.x, observer.pos.y, radius, observer.id);
   const visible: Creature[] = [];
+  const baselineThreat = getSimConstants().hunting.prey_threat.baseline;
 
   for (const point of nearby) {
     const subject = byId.get(point.id);
@@ -38,34 +54,53 @@ export function sense(
     if (!observer.perceivedStates.has(subject.id)) {
       const ageStage = ageStageFor(subject.species, ageWeeksAt(subject.bornAtTick, currentTick));
       const noise = rng.gaussian(0, 0.08);
-      // Базовая воспринимаемая угроза (7.8.1: "приблизительна... по
-      // умолчанию"): для пингвина, впервые заметившего касатку, разумный
-      // умолчательный ориентир — "хищник рядом, но не факт, что охотится
-      // именно сейчас" (0.4), а не 0 — иначе flee/alarm_call никогда не
-      // получили бы стартовой полезности до первого сигнала. Дальше
-      // фактическая охота/stealth_approach сдвигают это значение точнее
-      // (resolveActions/detectEvents, шаги 6-7 А.3).
-      const baselineThreat = observer.species === "penguin" && subject.species === "orca" ? 0.4 : 0;
+      const isPredator = observer.species === "penguin" && subject.species === "orca";
       observer.perceivedStates.set(subject.id, {
         perceivedVigor: clamp(trueVigor(subject, ageStage) + noise, 0, 1),
-        perceivedThreat: baselineThreat,
+        perceivedThreat: isPredator ? baselineThreat : 0,
         lastSignalTick: -Infinity,
       });
+      if (isPredator) {
+        applyEmotionDelta(observer, EMOTION_DELTAS.see_orca);
+      }
     }
   }
 
   return visible;
 }
 
+/** Пока касатка в радиусе — floor threat (иначе decay съедает страх). */
+export function reinforceVisiblePredatorThreat(observer: Creature, visible: Creature[]): void {
+  if (observer.species !== "penguin") return;
+  const floor = getSimConstants().hunting.prey_threat.visible_floor;
+  for (const subject of visible) {
+    if (subject.species !== "orca") continue;
+    const state = observer.perceivedStates.get(subject.id);
+    if (!state) continue;
+    if (state.perceivedThreat < floor) state.perceivedThreat = floor;
+  }
+}
+
+/** После попытки охоты / контакта — поднять threat жертвы к этой касатке. */
+export function bumpPreyThreatOfOrca(prey: Creature, orca: Creature, level: number): void {
+  const existing = prey.perceivedStates.get(orca.id) ?? {
+    perceivedVigor: 0.5,
+    perceivedThreat: getSimConstants().hunting.prey_threat.baseline,
+    lastSignalTick: -Infinity,
+  };
+  existing.perceivedThreat = Math.min(1, Math.max(existing.perceivedThreat, level));
+  prey.perceivedStates.set(orca.id, existing);
+}
+
 /**
  * Шаг 12 тик-пайплайна (А.3): воспринимаемое состояние стягивается к
  * истинной оценке без подкрепления сигналом — обман недолговечен (7.8.1).
- * `trueVigorLookup` — функция получения истинной бодрости субъекта (нужна
- * извне, т.к. Creature субъекта не хранится внутри perceivedStates).
+ * Threat к касатке decay'ится только когда она НЕ в visibleIds.
  */
 export function decayPerceivedStates(
   observer: Creature,
   trueVigorLookup: (subjectId: string) => number | undefined,
+  visibleIds?: Set<string>,
 ): void {
   const decayRate = getSimConstants().signaling.perceived_state_decay_per_tick;
   for (const [subjectId, state] of observer.perceivedStates) {
@@ -73,7 +108,10 @@ export function decayPerceivedStates(
     if (trueValue !== undefined) {
       state.perceivedVigor += (trueValue - state.perceivedVigor) * decayRate;
     }
-    state.perceivedThreat += (0 - state.perceivedThreat) * decayRate;
+    if (!visibleIds?.has(subjectId)) {
+      state.perceivedThreat += (0 - state.perceivedThreat) * decayRate;
+      if (state.perceivedThreat < 0.001) state.perceivedThreat = 0;
+    }
   }
 
   const zoneDecayRate = 0.15; // А.2: "затухание 15%/тик - быстрее, чем у perceived_states"

@@ -33,7 +33,7 @@ describe("reflection-worker: честность повествования (7.8.
   it("выдуманное имя, отсутствующее в episodes/bonds/signals, проваливает валидацию (не применяется)", async () => {
     const pool = getTestPool();
     await resetDanglingCandidates(pool);
-    await pool.query(`INSERT INTO world_clock (id, tick, phase) VALUES (1, 30, 'day') ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick`);
+    await pool.query(`INSERT INTO world_clock (id, tick, phase) VALUES (1, 100000, 'day') ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick`);
 
     const creatureId = await insertCreature(pool, { species: "penguin", name: "Честность1" });
     await pool.query(`INSERT INTO episodes (creature_id, tick, type, participants, significance) VALUES ($1, 30, 'birth', '{}', 0.6)`, [creatureId]);
@@ -67,7 +67,7 @@ describe("reflection-worker: честность повествования (7.8.
   it("честный ответ (факты только из episodes) проходит и совпадает с реальным журналом", async () => {
     const pool = getTestPool();
     await resetDanglingCandidates(pool);
-    await pool.query(`INSERT INTO world_clock (id, tick, phase) VALUES (1, 40, 'day') ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick`);
+    await pool.query(`INSERT INTO world_clock (id, tick, phase) VALUES (1, 100000, 'day') ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick`);
 
     const victim = await insertCreature(pool, { species: "penguin", name: "Погибшая" });
     await pool.query(`UPDATE creatures SET died_at_tick = 39, death_cause = 'predation' WHERE id = $1`, [victim]);

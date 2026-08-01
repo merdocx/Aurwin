@@ -12,6 +12,8 @@ export interface CreatureCard {
   is_asleep: boolean;
   leading_skills: Array<{ skill: string; value: number }>;
   narrative_facts: string[];
+  intentions: Array<{ text: string; effect?: Record<string, unknown> }>;
+  habits: Record<string, number>;
   timeline: Array<{
     id: string;
     tick: number;
@@ -25,7 +27,7 @@ export interface CreatureCard {
 
 export interface SocialGraph {
   nodes: Array<{ id: string; species: "penguin" | "orca"; name: string }>;
-  edges: Array<{ a: string; b: string; strength: number }>;
+  edges: Array<{ a: string; b: string; strength: number; kind: "friend" | "mate" | "kin" }>;
 }
 
 export interface WorldStats {
@@ -38,7 +40,10 @@ export interface WorldStats {
 function apiBase(): string {
   const explicit = import.meta.env.VITE_API_URL as string | undefined;
   if (explicit) return explicit;
-  return `${window.location.protocol}//${window.location.hostname}:3000`;
+  if (window.location.port === "5173" || window.location.hostname === "localhost") {
+    return `${window.location.protocol}//${window.location.hostname}:3000`;
+  }
+  return "";
 }
 
 async function getJson<T>(path: string): Promise<T> {

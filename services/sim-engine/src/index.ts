@@ -25,11 +25,15 @@ import {
   persistGenesis,
   syncAversions,
   syncBonds,
+  syncPerceivedStates,
+  syncPerceivedZoneThreat,
+  syncSignalTrust,
   updateSignalOutcomes,
   updateWorldClock,
   upsertCreatures,
   type DeathRecord,
 } from "./persistence/persist.js";
+import { reflectionSyncWatermark, reloadReflectionFields } from "./persistence/reloadReflection.js";
 import { hasAnyCreatureRecord, loadWorldState } from "./persistence/restore.js";
 import { recordWorldEvent, setPopulationGauges, startMetricsServer } from "./metrics.js";
 
@@ -93,7 +97,7 @@ if (restored) {
   // persistGenesis) — устраняет само окно, в котором creatures успевают
   // попасть в БД без world_clock при крахе процесса между двумя раздельными
   // await (ровно причина дефекта двойного genesis при приёмке).
-  await persistGenesis(pool, sim.aliveCreatures(), sim.currentTick, sim.world.dayNight.phase());
+  await persistGenesis(pool, sim.aliveCreatures(), sim.currentTick, sim.world.dayNight.phase(), sim.fishDensitySnapshot());
   console.log(`[sim-engine] genesis записан атомарно: тик ${sim.currentTick}, ${sim.aliveCreatures().length} существ`);
 }
 
@@ -101,6 +105,7 @@ startMetricsServer(sim);
 
 let lastPhase = sim.world.dayNight.phase();
 let stopped = false;
+let lastReflectionSyncAt = reflectionSyncWatermark(sim.aliveCreatures());
 
 async function persistTick(): Promise<void> {
   const events = pendingEvents;
@@ -116,7 +121,9 @@ async function persistTick(): Promise<void> {
   const phase = sim.world.dayNight.phase();
   const isFullSnapshot = sim.currentTick % snapshot_interval_ticks === 0;
 
-  await upsertCreatures(pool, alive, isFullSnapshot ? "full" : "light");
+  // Light UPDATE не INSERT'ит новорождённых → FK на decision_log/episodes.
+  // После масштаба ÷2 (N≈20–60) full upsert каждый тик приемлем.
+  await upsertCreatures(pool, alive, "full");
   if (deaths.length > 0) await applyDeaths(pool, deaths);
   if (events.length > 0) await insertWorldEvents(pool, events);
   if (episodes.length > 0) await insertEpisodes(pool, episodes);
@@ -126,8 +133,11 @@ async function persistTick(): Promise<void> {
   if (isFullSnapshot) {
     await syncBonds(pool, [...sim.bonds.values()]);
     await syncAversions(pool, [...sim.aversions.values()]);
+    await syncPerceivedStates(pool, alive);
+    await syncPerceivedZoneThreat(pool, alive);
+    await syncSignalTrust(pool, alive);
   }
-  await updateWorldClock(pool, sim.currentTick, phase);
+  await updateWorldClock(pool, sim.currentTick, phase, sim.fishDensitySnapshot());
   await notifyTick(pool, sim.currentTick, phase);
   setPopulationGauges(sim);
 }
@@ -136,6 +146,9 @@ async function loop(): Promise<void> {
   if (stopped) return;
   const start = Date.now();
   try {
+    if (sim.currentTick % snapshot_interval_ticks === 0) {
+      lastReflectionSyncAt = await reloadReflectionFields(pool, sim.creatures, lastReflectionSyncAt);
+    }
     sim.tick();
     const phase = sim.world.dayNight.phase();
     if (phase !== lastPhase) {

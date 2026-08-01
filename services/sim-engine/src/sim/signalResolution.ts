@@ -1,4 +1,5 @@
 import type { Rng } from "./rng.js";
+import { applyEmotionDelta, EMOTION_DELTAS } from "./emotion.js";
 import { getSimConstants } from "./simConstants.js";
 import type { Creature, SignalRecord } from "./types.js";
 
@@ -87,7 +88,7 @@ export function wakeSleepersOnAlarm(sender: Creature, receivers: Creature[], rng
     const trust = receiver.trust.get(sender.id)?.trust ?? constants.starting_value;
     if (rng.bool(trust)) {
       receiver.isAsleep = false;
-      receiver.emotion.arousal = Math.min(1, receiver.emotion.arousal + 0.4);
+      applyEmotionDelta(receiver, EMOTION_DELTAS.woken_by_alarm);
       woken.push(receiver);
     }
   }

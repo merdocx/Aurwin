@@ -1,13 +1,13 @@
-import type { Rng } from "./rng.js";
+import { clamp, type Rng } from "./rng.js";
 import { getSimConstants } from "./simConstants.js";
 import { NameGenerator } from "./names.js";
 import { inheritChronotype, inheritTraits } from "./traits.js";
-import { defaultWeights } from "./genesis.js";
+import { defaultWeights, starterNarrativeFact } from "./genesis.js";
 import { computeAuthority } from "./authority.js";
 import { ageStageFor } from "./lifecycle.js";
 import { ticksToInternalDays, ticksToRealDays } from "./time.js";
-import { zoneAt } from "../world/zones.js";
-import { SKILL_KEYS, type AgeStage, type Creature, type Skills } from "./types.js";
+import { ecoZoneAtSim } from "../world/landMask.js";
+import { SKILL_KEYS, type AgeStage, type Creature, type DecisionWeights, type Skills } from "./types.js";
 
 /**
  * Запрет близкого инбридинга на глубину 2 поколений (7.4): не
@@ -56,6 +56,42 @@ export function canMate(a: Creature, b: Creature, check: MatingCheck): boolean {
   return true;
 }
 
+function inheritHabits(parentA: Creature, parentB: Creature, rng: Rng): Creature["habits"] {
+  const { habit_weight, habit_noise_amplitude } = getSimConstants().reproduction.culture_inherit;
+  const habits: Creature["habits"] = {};
+  const zones = new Set([...Object.keys(parentA.habits), ...Object.keys(parentB.habits)]);
+  for (const zone of zones) {
+    const parentalMean = ((parentA.habits[zone as keyof Creature["habits"]] ?? 0) + (parentB.habits[zone as keyof Creature["habits"]] ?? 0)) / 2;
+    habits[zone as keyof Creature["habits"]] = clamp(parentalMean * habit_weight + rng.noise(habit_noise_amplitude), -1, 1);
+  }
+  return habits;
+}
+
+function inheritWeights(species: Creature["species"], parentA: Creature, parentB: Creature): DecisionWeights {
+  const defaults = defaultWeights(species);
+  const { weights_blend } = getSimConstants().reproduction.culture_inherit;
+  const corridor = getSimConstants().reflection.weight_lifetime_corridor;
+  const blend = (base: number, a: number, b: number) => clamp(base + ((a + b) / 2 - base) * weights_blend, base - corridor, base + corridor);
+
+  const weights = structuredClone(defaults);
+  weights.w_trait = blend(defaults.w_trait, parentA.weights.w_trait, parentB.weights.w_trait);
+  weights.w_skill = blend(defaults.w_skill, parentA.weights.w_skill, parentB.weights.w_skill);
+  weights.w_habit = blend(defaults.w_habit, parentA.weights.w_habit, parentB.weights.w_habit);
+  for (const key of ["hunger", "energy", "social", "sleep"] as const) {
+    weights.w_need[key] = blend(defaults.w_need[key], parentA.weights.w_need[key], parentB.weights.w_need[key]);
+  }
+  if (weights.hunt_attractiveness && parentA.weights.hunt_attractiveness && parentB.weights.hunt_attractiveness) {
+    for (const key of ["w_vigor", "w_dist", "w_group", "w_stage"] as const) {
+      weights.hunt_attractiveness[key] = blend(
+        defaults.hunt_attractiveness![key],
+        parentA.weights.hunt_attractiveness[key],
+        parentB.weights.hunt_attractiveness[key],
+      );
+    }
+  }
+  return weights;
+}
+
 export function createOffspring(
   parentA: Creature,
   parentB: Creature,
@@ -70,10 +106,10 @@ export function createOffspring(
   const chronotype = inheritChronotype(parentA.chronotype, parentB.chronotype, rng);
   const sex = rng.bool(0.5) ? "m" : "f";
   const pos = { ...parentA.pos };
-  const weights = defaultWeights(species);
+  const weights = inheritWeights(species, parentA, parentB);
   const skills = {} as Skills;
-  const maxSkill = constants.skills.genesis_initial_max;
-  for (const key of SKILL_KEYS) skills[key] = rng.range(0, maxSkill);
+  const { skill_seed } = constants.reproduction.culture_inherit;
+  for (const key of SKILL_KEYS) skills[key] = clamp(((parentA.skills[key] + parentB.skills[key]) / 2) * skill_seed, 0, constants.skills.cap);
 
   const creature: Creature = {
     id: nextId(),
@@ -85,7 +121,7 @@ export function createOffspring(
     parentB: parentB.id,
     pos,
     velocity: { x: 0, y: 0 },
-    zone: zoneAt(pos.x, pos.y).name,
+    zone: ecoZoneAtSim(pos.x, pos.y),
     traits,
     traitsBirth: { ...traits },
     needs: { ...constants.population.genesis_initial_needs },
@@ -94,9 +130,10 @@ export function createOffspring(
     skills,
     chronotype,
     isAsleep: false,
+    activity: "idle",
     ageStage: ageStageFor(species, 0),
     authority: 0,
-    habits: {},
+    habits: inheritHabits(parentA, parentB, rng),
     weights,
     weightsBirth: structuredClone(weights),
     lastReflectionAt: tick,
@@ -108,7 +145,7 @@ export function createOffspring(
     trust: new Map(),
     cohortId: `${species}-d${Math.floor(ticksToRealDays(tick))}`,
     actionCounts: {},
-    narrativeFacts: [],
+    narrativeFacts: [starterNarrativeFact("birth")],
   };
   creature.authority = computeAuthority(creature, 0);
   return creature;

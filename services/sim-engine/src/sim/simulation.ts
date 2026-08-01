@@ -3,15 +3,18 @@ import { Rng, clamp } from "./rng.js";
 import { getSimConstants } from "./simConstants.js";
 import { NameGenerator } from "./names.js";
 import { World } from "../world/world.js";
+import type { FishDensitySnapshot } from "../world/fish.js";
 import { SpatialGrid, type IndexedPoint } from "../world/spatialIndex.js";
 import type { ZoneName } from "../world/zones.js";
 import { createGenesisPopulation } from "./genesis.js";
+import { processReintroduction } from "./reintroduction.js";
 import { canMate, createOffspring, isForbiddenPair } from "./reproduction.js";
 import { ageStageFor, ageWeeksAt } from "./lifecycle.js";
 import { advanceBioClocks, rollOldAgeDeath } from "./needs.js";
-import { sense, decayPerceivedStates } from "./perception.js";
+import { sense, decayPerceivedStates, reinforceVisiblePredatorThreat, bumpPreyThreatOfOrca, visionRange, hearingRange } from "./perception.js";
 import { decide, type DecideContext, type Decision } from "./utilityAI.js";
 import {
+  deriveActivity,
   movementTargetPos,
   resolveEat,
   resolveHunt,
@@ -20,7 +23,9 @@ import {
   resolveSignal,
   resolveSleepToggle,
   resolveStealthApproach,
+  rollHuntNotice,
 } from "./actions.js";
+import { applyPreContactDefense, applySoftSeparation } from "./separation.js";
 import { decayAversions, decayUntouchedBonds, growBondForPair, recordAversion, bondStrengthLookup, aversionStrengthLookup } from "./social.js";
 import { decaySkills, growSkill, updateHabit } from "./skillsHabits.js";
 import { computeAuthority, transmissionWeight } from "./authority.js";
@@ -28,6 +33,7 @@ import { trueVigor } from "./vigor.js";
 import { distance } from "./huntingAttractiveness.js";
 import { recordEpisode, decayEpisodeSignificance, propagateSocialLearning, transmitOnBondFormed } from "./memory.js";
 import { applyTraitDeltas, applyWeightDeltas, generateMockReflection, shouldTriggerBackgroundReflection, type ReflectionResult } from "./reflection.js";
+import { applyEmotionDelta, EMOTION_DELTAS } from "./emotion.js";
 import { applyTrustUpdate, resolveAlarmCallsOnExpiry, resolveDisplayVigorAgainstHunt, wakeSleepersOnAlarm } from "./signalResolution.js";
 import { ticksToRealSeconds, realHoursToTicks } from "./time.js";
 import {
@@ -46,7 +52,7 @@ import {
 } from "./types.js";
 
 const SIGNAL_RESOLVE_WINDOW_TICKS_FN = () => Math.round(realHoursToTicks(1));
-const WITNESS_QUERY_CELL_SIZE = 100;
+const WITNESS_QUERY_CELL_SIZE = 50;
 
 interface PendingReflection {
   creatureId: string;
@@ -84,6 +90,7 @@ export interface RestoredWorldState {
   creatures: Creature[];
   bonds: BondRecord[];
   aversions: AversionRecord[];
+  fishDensity?: FishDensitySnapshot;
 }
 
 /** Метрики, накапливаемые по ходу симуляции — потребляются CLI-отчётом (task 12/13). */
@@ -165,6 +172,8 @@ export class Simulation {
   private hooks: SimulationHooks;
   private readonly decisionLogCap = 20_000;
   private readonly worldEventsCap = 5_000;
+  /** Последняя реинтродукция по виду — кулдаун между повторными подселениями (7.4). */
+  private lastReintroductionTick: Partial<Record<Species, number>> = {};
 
   constructor(seed: number, hooks: SimulationHooks = {}, restore?: RestoredWorldState) {
     this.rng = new Rng(seed);
@@ -173,6 +182,7 @@ export class Simulation {
     if (restore) {
       this.tick_ = restore.tick;
       this.world.fastForwardTo(restore.tick);
+      this.world.restoreFishDensity(restore.fishDensity);
       for (const creature of restore.creatures) this.creatures.set(creature.id, creature);
       for (const bond of restore.bonds) this.bonds.set(bondKey(bond.creatureA, bond.creatureB), bond);
       for (const aversion of restore.aversions) this.aversions.set(aversionKey(aversion.subjectId, aversion.objectId), aversion);
@@ -295,7 +305,9 @@ export class Simulation {
     // 4. sense()
     const visibleByCreature = new Map<string, Creature[]>();
     for (const creature of alive) {
-      visibleByCreature.set(creature.id, sense(creature, this.spatialIndex, byId, phase, this.tick_, this.rng));
+      const visible = sense(creature, this.spatialIndex, byId, phase, this.tick_, this.rng);
+      reinforceVisiblePredatorThreat(creature, visible);
+      visibleByCreature.set(creature.id, visible);
     }
 
     // 5. decide()
@@ -359,11 +371,16 @@ export class Simulation {
     // 12. decayPerceivedStates()
     for (const creature of alive) {
       if (!isAlive(creature)) continue;
-      decayPerceivedStates(creature, (subjectId) => {
-        const subject = this.creatures.get(subjectId);
-        if (!subject || !isAlive(subject)) return undefined;
-        return trueVigor(subject, subject.ageStage);
-      });
+      const visibleIds = new Set((visibleByCreature.get(creature.id) ?? []).map((c) => c.id));
+      decayPerceivedStates(
+        creature,
+        (subjectId) => {
+          const subject = this.creatures.get(subjectId);
+          if (!subject || !isAlive(subject)) return undefined;
+          return trueVigor(subject, subject.ageStage);
+        },
+        visibleIds,
+      );
     }
     decayAversions(this.aversions, dtRealSeconds);
     for (const creature of alive) {
@@ -372,8 +389,49 @@ export class Simulation {
     this.pruneRecentPredation();
     this.pruneHuntCooldowns();
 
+    // Реинтродукция при полном вымирании вида (7.4) — после всех смертей тика.
+    this.checkReintroductionStep();
+
     // 13. broadcastDelta() — хук без реализации в фазе 4 (наблюдение — фаза 5).
     // 14. persistSnapshot() — хук без реализации в фазе 4 (БД — вне рамок; см. ops/DEVIATIONS.md).
+  }
+
+  /** Плотность рыбы для персистентности (world_clock.fish_density). */
+  fishDensitySnapshot(): FishDensitySnapshot {
+    return this.world.fish.snapshot();
+  }
+
+  private countAlive(species: Species): number {
+    let n = 0;
+    for (const c of this.creatures.values()) {
+      if (isAlive(c) && c.species === species) n += 1;
+    }
+    return n;
+  }
+
+  private checkReintroductionStep(): void {
+    const result = processReintroduction({
+      tick: this.tick_,
+      rng: this.rng,
+      nameGen: this.nameGen,
+      nextId: this.nextId,
+      ticksPerInnerDay: this.world.dayNight.ticksPerDay(),
+      countAlive: (species) => this.countAlive(species),
+      lastReintroductionTick: this.lastReintroductionTick,
+    });
+    this.lastReintroductionTick = result.lastReintroductionTick;
+    for (const creature of result.creatures) this.creatures.set(creature.id, creature);
+    for (const event of result.events) {
+      this.emitWorldEvent({
+        tick: event.tick,
+        type: "reintroduction",
+        zone: event.species === "penguin" ? "main_ice" : "open_water",
+        payload: { species: event.species, count: event.count, reason: "extinction" },
+      });
+      console.warn(
+        `[sim-engine] РЕИНТРОДУКЦИЯ ${event.species}: +${event.count} особей на тике ${event.tick} — провал балансировки, см. ops/BALANCE_LOG.md`,
+      );
+    }
   }
 
   // ---- шаг 3 ----
@@ -443,9 +501,27 @@ export class Simulation {
    * жертву касатка может атаковать в тот же тик без ограничения.
    */
   private lastHuntAttemptTick = new Map<string, number>();
+  /** Кулдаун срыва сближения (group/guard pre_contact). */
+  private lastHuntBreakTick = new Map<string, number>();
 
   private visibilityMultiplierFor(creatureId: string): number {
     return this.visibilityBoostThisTick.get(creatureId) ?? 1;
+  }
+
+  private tryHuntContact(
+    orca: Creature,
+    target: Creature | undefined,
+    tickSkillGrowth: Array<{ creatureId: string; skill: keyof Creature["skills"] }>,
+    tickOutcomes: Array<{ creatureId: string; zone: ZoneName; score: number }>,
+  ): void {
+    if (!target || !isAlive(target)) return;
+    if (distance(orca.pos, target.pos) > getSimConstants().hunting.contact_radius_units) return;
+    const pairKey = `${orca.id}|${target.id}`;
+    const last = this.lastHuntAttemptTick.get(pairKey);
+    const cooldownTicks = Math.round(realHoursToTicks(getSimConstants().hunting.reattempt_cooldown_real_minutes / 60));
+    if (last !== undefined && this.tick_ - last < cooldownTicks) return;
+    this.lastHuntAttemptTick.set(pairKey, this.tick_);
+    this.resolveHuntAttempt(orca, target, tickSkillGrowth, tickOutcomes);
   }
 
   // ---- шаг 6 ----
@@ -486,6 +562,31 @@ export class Simulation {
       }
     }
 
+    // Notice → flee: удача до контакта (evasion × threat), commit flee в этом тике.
+    const contactR = getSimConstants().hunting.contact_radius_units;
+    const approachBand = contactR + getSimConstants().hunting.pre_contact.approach_band_extra_units;
+    const steerCommit = getSimConstants().movement.steering.action_commit_ticks;
+    for (const creature of alive) {
+      if (!isAlive(creature) || creature.species !== "orca") continue;
+      const decision = decisions.get(creature.id);
+      if (!decision?.targetId) continue;
+      if (decision.action !== "hunt" && decision.action !== "stealth_approach" && decision.action !== "coordinate_hunt") continue;
+      const prey = this.creatures.get(decision.targetId);
+      if (!prey || !isAlive(prey) || prey.species !== "penguin") continue;
+      const dist = distance(creature.pos, prey.pos);
+      if (dist > approachBand) continue;
+      if (!rollHuntNotice(creature, prey, this.tick_, this.rng)) continue;
+      bumpPreyThreatOfOrca(prey, creature, getSimConstants().hunting.prey_threat.hunt_bump);
+      decisions.set(prey.id, {
+        action: "flee",
+        targetId: creature.id,
+        zone: prey.zone,
+        factors: [{ action: "flee", utility: 1, breakdown: { noticed_in_advance: 1 } }],
+      });
+      prey.actionCommitTicks = steerCommit;
+      prey.actionCounts.flee = (prey.actionCounts.flee ?? 0) + 1;
+    }
+
     // Второй проход: движение + действия с исходом. Существо могло быть
     // убито ранее В ЭТОМ ЖЕ проходе (стало жертвой другой касатки) —
     // пропускаем, иначе мёртвый пингвин продолжил бы "действовать".
@@ -501,7 +602,10 @@ export class Simulation {
         case "eat": {
           const result = resolveEat(creature, this.world.fish, isNight, this.tick_, this.rng);
           tickOutcomes.push({ creatureId: creature.id, zone: creature.zone, score: result.success ? 1 : -0.3 });
-          if (result.success) tickSkillGrowth.push({ creatureId: creature.id, skill: "foraging" });
+          if (result.success) {
+            tickSkillGrowth.push({ creatureId: creature.id, skill: "foraging" });
+            this.emitWorldEvent({ tick: this.tick_, type: "forage_success", actorId: creature.id, zone: creature.zone, payload: {} });
+          }
           break;
         }
         case "socialize":
@@ -538,7 +642,14 @@ export class Simulation {
           break;
         }
         case "alarm_call": {
-          const audience = (visibleByCreature.get(creature.id) ?? []).filter((v) => v.species === "penguin");
+          // Слух ≠ зрение: получатели alarm_call — диск hearing_radius, не sense().
+          const hearR = hearingRange(creature);
+          const withinHearing = this.spatialIndex
+            .queryRadius(creature.pos.x, creature.pos.y, hearR, creature.id)
+            .map((p) => this.creatures.get(p.id))
+            .filter((c): c is Creature => !!c && isAlive(c));
+          const audience = withinHearing.filter((v) => v.species === "penguin");
+          // true_state: видит ли кричавший касатку (зрение).
           const orcaVisible = (visibleByCreature.get(creature.id) ?? []).some((v) => v.species === "orca");
           const record = resolveSignal(
             creature,
@@ -586,33 +697,76 @@ export class Simulation {
             this.acc.signalsSent["stealth_approach"] = (this.acc.signalsSent["stealth_approach"] ?? 0) + 1;
             this.acc.signalsDisconfirmed["stealth_approach"] = (this.acc.signalsDisconfirmed["stealth_approach"] ?? 0) + 1;
           }
+          // Контакт резолвится после pre_contact defense (ниже).
           break;
         }
-        case "hunt": {
-          // "Базовая вероятность успеха ... при контакте" (А.10) — контакт
-          // операционализирован как физическая близость (contact_radius_units,
-          // см. ops/DEVIATIONS.md), а не сам факт выбора действия "hunt".
-          // Без этой проверки касатка "атакует" на КАЖДОМ тике, пока жертва
-          // всего лишь видна (радиус восприятия 200 у.е.), т.е. успевает
-          // сделать десятки независимых бросков вероятности за одно
-          // преследование ещё до физического сближения — это и обнажил
-          // первый же тестовый прогон (популяция пингвинов рухнула за 1
-          // внутренние сутки).
-          if (target && isAlive(target) && distance(creature.pos, target.pos) <= getSimConstants().hunting.contact_radius_units) {
-            const pairKey = `${creature.id}|${target.id}`;
-            const last = this.lastHuntAttemptTick.get(pairKey);
-            const cooldownTicks = Math.round(realHoursToTicks(getSimConstants().hunting.reattempt_cooldown_real_minutes / 60));
-            if (last === undefined || this.tick_ - last >= cooldownTicks) {
-              this.lastHuntAttemptTick.set(pairKey, this.tick_);
-              this.resolveHuntAttempt(creature, target, tickSkillGrowth, tickOutcomes);
-            }
-          }
+        case "hunt":
+        case "coordinate_hunt":
+          // Контакт = смерть; резолв после pre_contact (срыв group/guard).
           break;
-        }
         default:
           break;
       }
+
+      creature.activity = deriveActivity(creature, decision.action, this.tick_);
+      creature.lastAction = decision.action;
     }
+
+    // Удача до контакта: group/guard оттесняют жертву; coordinate отменяет.
+    const broken = applyPreContactDefense(
+      alive.filter(isAlive),
+      decisions,
+      this.guardedOffspringThisTick,
+      this.coordinatedPreyThisTick,
+      bounds,
+      this.lastHuntBreakTick,
+      this.tick_,
+    );
+    for (const b of broken) {
+      const orca = this.creatures.get(b.orcaId);
+      const prey = this.creatures.get(b.preyId);
+      if (!orca || !prey || !isAlive(prey)) continue;
+      this.emitWorldEvent({
+        tick: this.tick_,
+        type: "hunt_attempt",
+        actorId: orca.id,
+        targetId: prey.id,
+        zone: prey.zone,
+        payload: { caught: false, broken_approach: true },
+      });
+      applyEmotionDelta(orca, EMOTION_DELTAS.hunt_fail_orca);
+      applyEmotionDelta(prey, EMOTION_DELTAS.hunt_survived_prey);
+      tickOutcomes.push({ creatureId: orca.id, zone: prey.zone, score: -0.3 });
+      tickOutcomes.push({ creatureId: prey.id, zone: prey.zone, score: -1 });
+      tickSkillGrowth.push({ creatureId: prey.id, skill: "evasion" });
+      this.episodesThisTick.push(
+        recordEpisode(orca, this.tick_, { type: "hunt_attempt_failed_by_hunter", participants: [prey.id], significance: getSimConstants().episode_significance.hunt_attempt_failed_by_hunter, zone: prey.zone }, this.nextId),
+      );
+      recordAversion(this.aversions, prey.id, orca.id, getSimConstants().episode_significance.hunt_attempt_survived_by_prey);
+      this.episodesThisTick.push(
+        recordEpisode(prey, this.tick_, { type: "hunt_attempt_survived_by_prey", participants: [orca.id], significance: getSimConstants().episode_significance.hunt_attempt_survived_by_prey, zone: prey.zone }, this.nextId),
+      );
+      this.markEventWindow(prey.id);
+      // Кулдаун пары — окно уйти после срыва.
+      this.lastHuntAttemptTick.set(`${orca.id}|${prey.id}`, this.tick_);
+    }
+
+    // Касание при охоте = смерть (после возможного срыва).
+    for (const creature of alive) {
+      if (!isAlive(creature) || creature.species !== "orca") continue;
+      const decision = decisions.get(creature.id);
+      if (!decision?.targetId) continue;
+      if (decision.action !== "hunt" && decision.action !== "stealth_approach" && decision.action !== "coordinate_hunt") continue;
+      const target = this.creatures.get(decision.targetId);
+      this.tryHuntContact(creature, target, tickSkillGrowth, tickOutcomes);
+    }
+
+    applySoftSeparation(
+      alive.filter(isAlive),
+      decisions,
+      bounds,
+      this.spatialIndex,
+    );
   }
 
   private resolveHuntAttempt(
@@ -629,6 +783,7 @@ export class Simulation {
     const coordinated = (this.coordinatedPreyThisTick.get(prey.id)?.size ?? 0) > 0;
 
     const outcome = resolveHunt(orca, prey, { guarded, coordinated, groupProtected }, this.tick_, this.rng);
+    bumpPreyThreatOfOrca(prey, orca, getSimConstants().hunting.prey_threat.hunt_bump);
     this.emitWorldEvent({ tick: this.tick_, type: "hunt_attempt", actorId: orca.id, targetId: prey.id, zone: prey.zone, payload: { caught: outcome.caught } });
 
     this.recentPredation.push({ zone: prey.zone, tick: this.tick_ });
@@ -645,6 +800,7 @@ export class Simulation {
     }
 
     if (outcome.caught) {
+      applyEmotionDelta(orca, EMOTION_DELTAS.hunt_success_orca);
       this.emitWorldEvent({ tick: this.tick_, type: "hunt_success", actorId: orca.id, targetId: prey.id, zone: prey.zone, payload: {} });
       tickSkillGrowth.push({ creatureId: orca.id, skill: "hunting" });
       if (coordinated) {
@@ -660,6 +816,8 @@ export class Simulation {
       this.killCreature(prey, "predation");
       if (guarded) this.acc.guardEpisodes += 1;
     } else {
+      applyEmotionDelta(orca, EMOTION_DELTAS.hunt_fail_orca);
+      applyEmotionDelta(prey, EMOTION_DELTAS.hunt_survived_prey);
       tickOutcomes.push({ creatureId: orca.id, zone: prey.zone, score: -0.3 });
       this.episodesThisTick.push(
         recordEpisode(orca, this.tick_, { type: "hunt_attempt_failed_by_hunter", participants: [prey.id], significance: getSimConstants().episode_significance.hunt_attempt_failed_by_hunter, zone: prey.zone }, this.nextId),
@@ -700,11 +858,21 @@ export class Simulation {
       payload: { cause, species: creature.species, bornAtTick: creature.bornAtTick },
     });
 
+    // Свидетели смерти — кто видит тело (visionRange фазы/сна), не всегда .day.
+    const phase = this.world.dayNight.phase();
+    const queryR = getSimConstants().day_night.perception_radius[creature.species][phase];
     const nearby = this.spatialIndex
-      .queryRadius(creature.pos.x, creature.pos.y, getSimConstants().day_night.perception_radius[creature.species].day, creature.id)
+      .queryRadius(creature.pos.x, creature.pos.y, queryR, creature.id)
       .map((p) => this.creatures.get(p.id))
-      .filter((c): c is Creature => !!c && isAlive(c) && c.species === creature.species);
+      .filter((c): c is Creature => !!c && isAlive(c) && c.species === creature.species)
+      .filter((c) => distance(creature.pos, c.pos) <= visionRange(c, phase));
     const { witnesses, friends } = this.witnessesAndFriendsOf(creature, nearby);
+    const friendThreshold = getSimConstants().social.friendship.threshold;
+    for (const witness of witnesses) {
+      if (bondStrengthLookup(this.bonds, witness.id)(creature.id) >= friendThreshold) {
+        applyEmotionDelta(witness, EMOTION_DELTAS.friend_died);
+      }
+    }
 
     if (witnesses.length > 0 || friends.length > 0) {
       const virtualEpisode = {
@@ -770,6 +938,10 @@ export class Simulation {
     this.trackResolvedSignals(expiredVigor);
     this.pendingSignals = this.pendingSignals.filter((s) => s.outcome === "pending");
 
+    // Courtship changes a sufficiently strong bond into a mate bond; a
+    // rejected court attempt becomes a small, directed social injury.
+    this.processCourtship(decisions, byId);
+
     // Reproduction — проверка допустимых пар среди друзей/партнёров.
     this.processReproduction(byId);
 
@@ -778,6 +950,36 @@ export class Simulation {
       if (decision.action !== "guard_offspring") continue;
       const parent = byId.get(creatureId);
       if (parent) this.emitWorldEvent({ tick: this.tick_, type: "guard_started", actorId: parent.id, targetId: decision.targetId, zone: parent.zone, payload: {} });
+    }
+  }
+
+  private processCourtship(decisions: Map<string, Decision>, byId: Map<string, Creature>): void {
+    const minBond = getSimConstants().reproduction.min_bond_strength_to_mate;
+    const offenseStrength = getSimConstants().episode_significance.bond_broken;
+    for (const [courtierId, decision] of decisions) {
+      if (decision.action !== "court" || !decision.targetId) continue;
+      const courtier = byId.get(courtierId);
+      const target = byId.get(decision.targetId);
+      if (!courtier || !target || !isAlive(courtier) || !isAlive(target)) continue;
+      const record = this.bonds.get(bondKey(courtier.id, target.id));
+      if (!record || record.strength < minBond) {
+        if (!this.aversions.has(aversionKey(courtier.id, target.id))) {
+          recordAversion(this.aversions, courtier.id, target.id, offenseStrength);
+          this.emitWorldEvent({
+            tick: this.tick_,
+            type: "offense",
+            actorId: courtier.id,
+            targetId: target.id,
+            zone: courtier.zone,
+            payload: { reason: "court_rejected" },
+          });
+        }
+        continue;
+      }
+      if (record.kind !== "mate") {
+        record.kind = "mate";
+        this.emitWorldEvent({ tick: this.tick_, type: "mate_bonded", actorId: courtier.id, targetId: target.id, zone: courtier.zone, payload: {} });
+      }
     }
   }
 
@@ -800,11 +1002,16 @@ export class Simulation {
       const offspring = createOffspring(a, b, this.tick_, this.rng, this.nameGen, this.nextId);
       a.lastReproducedAtTick = this.tick_;
       b.lastReproducedAtTick = this.tick_;
+      const newlyBonded = record.kind !== "mate";
       record.kind = "mate";
       this.creatures.set(offspring.id, offspring);
       this.acc.births[offspring.species] += 1;
+      if (newlyBonded) {
+        this.emitWorldEvent({ tick: this.tick_, type: "mate_bonded", actorId: a.id, targetId: b.id, zone: a.zone, payload: {} });
+      }
 
       for (const parent of [a, b]) {
+        applyEmotionDelta(parent, EMOTION_DELTAS.birth_parent);
         this.episodesThisTick.push(
           recordEpisode(parent, this.tick_, { type: "birth", participants: [offspring.id], significance: constants.episode_significance.birth, zone: parent.zone }, this.nextId),
         );
@@ -868,6 +1075,9 @@ export class Simulation {
     const broken = decayUntouchedBonds(this.bonds, touched);
     for (const record of broken) {
       this.emitWorldEvent({ tick: this.tick_, type: "bond_broken", actorId: record.creatureA, targetId: record.creatureB, payload: {} });
+      if (record.kind === "mate") {
+        this.emitWorldEvent({ tick: this.tick_, type: "mate_breakup", actorId: record.creatureA, targetId: record.creatureB, payload: {} });
+      }
     }
   }
 

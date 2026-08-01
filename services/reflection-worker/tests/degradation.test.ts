@@ -19,7 +19,7 @@ describe("reflection-worker: деградация при недоступном 
 
   it("API недоступен: очередь копится (reflections остаются 'queued'), runPass не падает, существа не теряются", async () => {
     const pool = getTestPool();
-    await pool.query(`INSERT INTO world_clock (id, tick, phase) VALUES (1, 10, 'day') ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick`);
+    await pool.query(`INSERT INTO world_clock (id, tick, phase) VALUES (1, 100000, 'day') ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick`);
 
     const creatureId = await insertCreature(pool, { species: "penguin", name: "Деградация1" });
     await pool.query(`INSERT INTO episodes (creature_id, tick, type, participants, significance) VALUES ($1, 10, 'birth', '{}', 0.6)`, [creatureId]);
@@ -43,7 +43,7 @@ describe("reflection-worker: деградация при недоступном 
 
   it("после восстановления API очередь разбирается РОВНО один раз на существо — без дублирующего применения", async () => {
     const pool = getTestPool();
-    await pool.query(`INSERT INTO world_clock (id, tick, phase) VALUES (1, 20, 'day') ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick`);
+    await pool.query(`INSERT INTO world_clock (id, tick, phase) VALUES (1, 100000, 'day') ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick`);
 
     const creatureId = await insertCreature(pool, { species: "penguin", name: "Деградация2" });
     await pool.query(`INSERT INTO episodes (creature_id, tick, type, participants, significance) VALUES ($1, 20, 'birth', '{}', 0.6)`, [creatureId]);
@@ -80,12 +80,13 @@ describe("reflection-worker: деградация при недоступном 
 
     const creature = await pool.query(`SELECT narrative, last_reflection_at FROM creatures WHERE id = $1`, [creatureId]);
     expect(creature.rows[0].narrative).not.toBeNull();
-    expect(Number(creature.rows[0].last_reflection_at)).toBe(20);
+    expect(Number(creature.rows[0].last_reflection_at)).toBe(100000);
   });
 
   it("бэкофф между попытками растёт (экспоненциально), не бьёт по API сразу же после первого сбоя", async () => {
     const pool = getTestPool();
     const creatureId = await insertCreature(pool, { species: "penguin", name: "Бэкофф" });
+    await pool.query(`INSERT INTO world_clock (id, tick, phase) VALUES (1, 100000, 'day') ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick`);
     await pool.query(`INSERT INTO episodes (creature_id, tick, type, participants, significance) VALUES ($1, 1, 'birth', '{}', 0.6)`, [creatureId]);
 
     const transport = new FakeAnthropicTransport(buildGroundedResponse);
@@ -122,7 +123,7 @@ describe("reflection-worker: деградация при недоступном 
    */
   it("ошибка ОДНОГО элемента batch (не всего batch) — не 'failed' навсегда, а 'queued' с бэкоффом, и подбирается повторно", async () => {
     const pool = getTestPool();
-    await pool.query(`INSERT INTO world_clock (id, tick, phase) VALUES (1, 30, 'day') ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick`);
+    await pool.query(`INSERT INTO world_clock (id, tick, phase) VALUES (1, 100000, 'day') ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick`);
 
     const creatureName = "БатчОшибка";
     const creatureId = await insertCreature(pool, { species: "orca", name: creatureName });
@@ -130,8 +131,13 @@ describe("reflection-worker: деградация при недоступном 
     // findDueBackgroundCandidates не требует эпизодов вовсе (см. db.ts), а
     // лишний 'birth' здесь заодно сделал бы существо ЕЩЁ и событийным
     // кандидатом (EVENT_TRIGGER_TYPES), создавая ВТОРУЮ строку reflections
-    // и путая счёт ниже.
+    // и путая счёт ниже. Нужен лёгкий non-trigger эпизод — иначе
+    // skip-empty-background не ставит LLM в очередь.
     await pool.query(`UPDATE creatures SET is_asleep = TRUE WHERE id = $1`, [creatureId]);
+    await pool.query(
+      `INSERT INTO episodes (creature_id, tick, type, participants, significance) VALUES ($1, 30, 'woken_by_alarm', '{}', 0.2)`,
+      [creatureId],
+    );
 
     const transport = new FakeAnthropicTransport(buildGroundedResponse);
     // Симулируем ошибку rate_limit ИМЕННО для этого существа с самого первого

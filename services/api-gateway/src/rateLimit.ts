@@ -34,8 +34,8 @@ export class RestRateLimiter {
 }
 
 /**
- * Лимит одновременных WS-соединений с IP (А.6: не более 3) + graceful-отказ
- * при перегрузке общим числом соединений сервера, вместо падения процесса.
+ * Лимит одновременных WS-соединений с IP + graceful-отказ при перегрузке
+ * общим числом соединений сервера, вместо падения процесса.
  */
 export class WsConnectionLimiter {
   private readonly perIp = new Map<string, number>();
@@ -55,10 +55,44 @@ export class WsConnectionLimiter {
     return true;
   }
 
+  /** Есть ли запас по IP (без общего потолка) — для решения «вытеснить старое». */
+  wouldExceedPerIp(ip: string): boolean {
+    return (this.perIp.get(ip) ?? 0) >= this.maxPerIp;
+  }
+
+  isTotalFull(): boolean {
+    return this.total >= this.maxTotal;
+  }
+
   release(ip: string): void {
     const current = this.perIp.get(ip) ?? 0;
-    if (current <= 1) this.perIp.delete(ip);
+    if (current <= 0) return;
+    if (current === 1) this.perIp.delete(ip);
     else this.perIp.set(ip, current - 1);
     this.total = Math.max(0, this.total - 1);
+  }
+
+  /** Диагностика для логов при отказе. */
+  debugState(): string {
+    const per = [...this.perIp.entries()].map(([ip, n]) => `${ip}:${n}`).join(",");
+    return `total=${this.total}/${this.maxTotal} perIp=[${per}] maxPerIp=${this.maxPerIp}`;
+  }
+}
+
+/** Скользящее окно 1 секунда: не более N входящих WS-сообщений от клиента (viewport spam). */
+export class WsMessageRateLimiter {
+  private readonly timestamps: number[] = [];
+
+  constructor(private readonly maxPerSecond: number) {}
+
+  /** true — сообщение можно обработать; false — превышен лимит, игнорируем. */
+  tryAcquire(now = Date.now()): boolean {
+    const windowMs = 1000;
+    while (this.timestamps.length > 0 && now - this.timestamps[0]! >= windowMs) {
+      this.timestamps.shift();
+    }
+    if (this.timestamps.length >= this.maxPerSecond) return false;
+    this.timestamps.push(now);
+    return true;
   }
 }

@@ -5,13 +5,14 @@ import { getConstants, type GatewayConstants } from "./config.js";
 import { zoneLayout } from "./zones.js";
 import { ageStageFor, ageWeeksAt } from "./age.js";
 import { getAliveCreaturesLight, getWorldClock, getWorldEventsSinceTick, type LiveCreatureRow } from "./queries.js";
-import { WsConnectionLimiter } from "./rateLimit.js";
+import { WsConnectionLimiter, WsMessageRateLimiter } from "./rateLimit.js";
 import { clientIp } from "./ip.js";
 
 /**
  * WS-поток состояния (А.6): snapshot при подключении, delta каждые 1-2 сек
- * ПО ВИДИМОЙ ОБЛАСТИ клиента. `narrative` здесь в принципе недостижим —
- * все данные приходят через queries.ts, который его никогда не выбирает.
+ * со всеми живыми существами (~50). Viewport принимается для будущей оптимизации,
+ * но не фильтрует delta — иначе клиент «замораживает» существ вне экрана.
+ * `narrative` здесь в принципе недостижим — все данные через queries.ts.
  */
 
 interface Viewport {
@@ -38,11 +39,8 @@ interface ClientState {
   ip: string;
   viewport?: Viewport;
   lastActivity: number;
-}
-
-function inViewport(row: LiveCreatureRow, vp: Viewport | undefined): boolean {
-  if (!vp) return true;
-  return row.pos_x >= vp.x && row.pos_x <= vp.x + vp.width && row.pos_y >= vp.y && row.pos_y <= vp.y + vp.height;
+  released: boolean;
+  msgLimiter: WsMessageRateLimiter;
 }
 
 function creatureDto(row: LiveCreatureRow, currentTick: number, visualTickSeconds: number) {
@@ -56,6 +54,7 @@ function creatureDto(row: LiveCreatureRow, currentTick: number, visualTickSecond
     zone: row.zone,
     emotion: row.emotion,
     is_asleep: row.is_asleep,
+    activity: row.activity ?? "idle",
     age_band: ageStageFor(row.species, ageWeeks),
   };
 }
@@ -79,14 +78,27 @@ class GatewayHub {
 
   attach(httpServer: HttpServer): void {
     httpServer.on("upgrade", (req, socket, head) => {
-      if (req.url !== "/ws") {
+      if (req.url !== "/ws" && !req.url?.startsWith("/ws?")) {
         socket.destroy();
         return;
       }
       const ip = clientIp(req);
-      if (!this.limiter.tryAcquire(ip)) {
+      // Если с IP уже max соединений — вытесняем самое старое (вкладка/зомби),
+      // а не отказываем новому наблюдателю. Общий потолок сервера — жёсткий.
+      if (this.limiter.isTotalFull()) {
+        console.warn(`[api-gateway] WS отказ (сервер полон) ip=${ip} ${this.limiter.debugState()}`);
         this.wss.handleUpgrade(req, socket, head, (ws) => {
-          // Graceful-отказ вместо падения api-gateway (А.6).
+          ws.send(JSON.stringify({ type: "error", message: "мир сейчас популярен, попробуйте позже" }));
+          ws.close(1013, "over capacity");
+        });
+        return;
+      }
+      if (this.limiter.wouldExceedPerIp(ip)) {
+        this.evictOldestForIp(ip);
+      }
+      if (!this.limiter.tryAcquire(ip)) {
+        console.warn(`[api-gateway] WS отказ (ёмкость) ip=${ip} ${this.limiter.debugState()}`);
+        this.wss.handleUpgrade(req, socket, head, (ws) => {
           ws.send(JSON.stringify({ type: "error", message: "мир сейчас популярен, попробуйте позже" }));
           ws.close(1013, "over capacity");
         });
@@ -97,7 +109,7 @@ class GatewayHub {
       });
     });
 
-    this.idleTimer = setInterval(() => this.disconnectIdle(), 60_000).unref();
+    this.idleTimer = setInterval(() => this.disconnectIdle(), 30_000).unref();
     this.broadcastTimer = setInterval(() => void this.broadcastTick(), this.constants.time.visual_tick_seconds * 1000).unref();
     httpServer.on("close", () => this.stop());
   }
@@ -118,15 +130,59 @@ class GatewayHub {
     const idleMs = this.constants.api.ws_idle_timeout_minutes * 60_000;
     const now = Date.now();
     for (const state of this.clients) {
+      // Ping детектит полуоткрытые TCP; без ответа ws-библиотека закроет сокет.
+      if (state.ws.readyState === WebSocket.OPEN) {
+        try {
+          state.ws.ping();
+        } catch {
+          /* ignore */
+        }
+      }
       if (now - state.lastActivity > idleMs) state.ws.close(1000, "idle timeout");
     }
   }
 
+  /** Закрывает самое давно неактивное соединение этого IP и сразу освобождает слот. */
+  private evictOldestForIp(ip: string): void {
+    let oldest: ClientState | undefined;
+    for (const state of this.clients) {
+      if (state.ip !== ip) continue;
+      if (!oldest || state.lastActivity < oldest.lastActivity) oldest = state;
+    }
+    if (!oldest) return;
+    console.warn(`[api-gateway] WS вытеснение старого соединения ip=${ip}`);
+    // Слот освобождаем синхронно — иначе tryAcquire сразу после гоняет с close-колбэком.
+    this.releaseClient(oldest);
+    try {
+      oldest.ws.close(1000, "replaced by newer observer");
+    } catch {
+      /* already released */
+    }
+  }
+
+  private releaseClient(state: ClientState): void {
+    if (state.released) return;
+    state.released = true;
+    this.clients.delete(state);
+    this.limiter.release(state.ip);
+  }
+
   private onConnection(ws: WebSocket, ip: string): void {
-    const state: ClientState = { ws, ip, lastActivity: Date.now() };
+    const state: ClientState = {
+      ws,
+      ip,
+      lastActivity: Date.now(),
+      released: false,
+      msgLimiter: new WsMessageRateLimiter(WS_MAX_MESSAGES_PER_SECOND),
+    };
     this.clients.add(state);
 
+    ws.on("pong", () => {
+      state.lastActivity = Date.now();
+    });
+
     ws.on("message", (data) => {
+      if (!state.msgLimiter.tryAcquire()) return;
       state.lastActivity = Date.now();
       try {
         const msg = JSON.parse(data.toString());
@@ -140,15 +196,8 @@ class GatewayHub {
       }
     });
 
-    ws.on("close", () => {
-      this.clients.delete(state);
-      this.limiter.release(ip);
-    });
-
-    ws.on("error", () => {
-      this.clients.delete(state);
-      this.limiter.release(ip);
-    });
+    ws.on("close", () => this.releaseClient(state));
+    ws.on("error", () => this.releaseClient(state));
 
     void this.sendSnapshot(state);
   }
@@ -170,6 +219,7 @@ class GatewayHub {
             tick_seconds: this.constants.time.visual_tick_seconds,
             creatures: dto,
             zones: zoneLayout(),
+            fish_density: clock.fishDensity,
           }),
         );
       }
@@ -178,15 +228,21 @@ class GatewayHub {
     }
   }
 
-  /** Общий для ВСЕХ клиентов запрос к БД раз в тик — фильтрация по видимой области происходит уже в памяти, не в БД (О(clients) не растёт с числом запросов). */
+  /** Общий для ВСЕХ клиентов запрос к БД раз в тик; один payload на всех клиентов. */
+  private broadcastInFlight = false;
+
   async broadcastTick(): Promise<void> {
     if (this.clients.size === 0) return;
+    if (this.broadcastInFlight) return;
+    this.broadcastInFlight = true;
     try {
       const [clock, creatures, events] = await Promise.all([
         getWorldClock(this.pool),
         getAliveCreaturesLight(this.pool),
         getWorldEventsSinceTick(this.pool, this.lastBroadcastTick),
       ]);
+      // Dedup: NOTIFY + interval могут совпасть на одном tick.
+      if (clock.tick === this.lastBroadcastTick && events.length === 0) return;
       this.lastBroadcastTick = clock.tick;
 
       const eventDtos = events.map((e) => ({
@@ -199,14 +255,24 @@ class GatewayHub {
         payload: e.payload,
       }));
 
+      const creatureDtos = creatures.map((c) => creatureDto(c, clock.tick, this.constants.time.visual_tick_seconds));
+      const payload = JSON.stringify({
+        type: "delta",
+        tick: clock.tick,
+        phase: clock.phase,
+        creatures: creatureDtos,
+        events: eventDtos,
+        fish_density: clock.fishDensity,
+      });
+
       for (const state of this.clients) {
         if (state.ws.readyState !== WebSocket.OPEN) continue;
-        const visible = creatures.filter((c) => inViewport(c, state.viewport));
-        const dto = visible.map((c) => creatureDto(c, clock.tick, this.constants.time.visual_tick_seconds));
-        state.ws.send(JSON.stringify({ type: "delta", tick: clock.tick, phase: clock.phase, creatures: dto, events: eventDtos }));
+        state.ws.send(payload);
       }
     } catch (err) {
       console.error("[api-gateway] ошибка broadcastTick:", err);
+    } finally {
+      this.broadcastInFlight = false;
     }
   }
 }
@@ -225,8 +291,12 @@ async function startListener(databaseUrl: string | undefined, onNotify: () => vo
   }
 }
 
+const WS_MAX_PAYLOAD_BYTES = 64 * 1024;
+/** Лимит входящих WS-сообщений от клиента (viewport spam), см. ops/DEVIATIONS.md P2. */
+const WS_MAX_MESSAGES_PER_SECOND = 20;
+
 export function attachWebSocketServer(httpServer: HttpServer, pool: Pool): GatewayHub {
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD_BYTES });
   const hub = new GatewayHub(pool, wss);
   hub.attach(httpServer);
   void startListener(process.env.DATABASE_URL, () => void hub.broadcastTick(), hub);

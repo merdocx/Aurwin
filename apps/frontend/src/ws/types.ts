@@ -1,6 +1,16 @@
 export type Phase = "day" | "night";
 export type Species = "penguin" | "orca";
 export type AgeBand = "juvenile" | "adult" | "old";
+export type CreatureActivity =
+  | "sleep"
+  | "walk"
+  | "swim"
+  | "hunt"
+  | "forage"
+  | "flee"
+  | "transit_in"
+  | "transit_out"
+  | "idle";
 
 export interface Emotion {
   valence: number; // -1..1
@@ -17,6 +27,8 @@ export interface CreatureDto {
   emotion: Emotion;
   is_asleep: boolean;
   age_band: AgeBand;
+  /** Режим для UI; опционален для старых payload. */
+  activity?: CreatureActivity;
 }
 
 export interface ZoneDto {
@@ -45,6 +57,7 @@ export interface SnapshotMessage {
   tick_seconds: number;
   creatures: CreatureDto[];
   zones: ZoneDto[];
+  fish_density: Record<string, number>;
 }
 
 export interface DeltaMessage {
@@ -53,6 +66,7 @@ export interface DeltaMessage {
   phase: Phase;
   creatures: CreatureDto[];
   events: WorldEventDto[];
+  fish_density?: Record<string, number>;
 }
 
 export interface ErrorMessage {

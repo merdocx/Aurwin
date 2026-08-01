@@ -1,6 +1,13 @@
 import type { Pool } from "pg";
 import { getConstants } from "./constants.js";
-import { countRecentEventReflections, findDueBackgroundCandidates, findDueEventCandidates, insertQueuedReflection } from "./db.js";
+import {
+  countRecentEventReflections,
+  fetchUnconsumedEpisodes,
+  findDueBackgroundCandidates,
+  findDueEventCandidates,
+  insertQueuedReflection,
+  insertSkippedEmptyBackground,
+} from "./db.js";
 import { buildReflectionRequest } from "./request.js";
 import type { ReflectionCandidate } from "./types.js";
 
@@ -64,6 +71,13 @@ export async function selectCandidates(pool: Pool): Promise<QueuedCandidate[]> {
 
   const backgroundIds = await findDueBackgroundCandidates(pool);
   for (const creatureId of backgroundIds) {
+    // Skip empty background: нет непоглощённых эпизодов — не тратим LLM,
+    // но фиксируем interval bookkeeping (discarded-строка), иначе due каждые N мин.
+    const unconsumed = await fetchUnconsumedEpisodes(pool, creatureId);
+    if (unconsumed.length === 0) {
+      await insertSkippedEmptyBackground(pool, creatureId);
+      continue;
+    }
     const candidate: ReflectionCandidate = { creatureId, kind: "background", mergedEpisodeIds: [] };
     const built = await buildReflectionRequest(pool, candidate);
     if (!built) continue;

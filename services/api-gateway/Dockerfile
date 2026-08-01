@@ -12,4 +12,5 @@ COPY services/api-gateway ./services/api-gateway
 COPY config ./config
 
 WORKDIR /app/services/api-gateway
-CMD ["npm", "run", "dev"]
+RUN npm run build
+CMD ["npm", "run", "start"]

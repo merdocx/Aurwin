@@ -27,6 +27,10 @@ ops/logs/
 # Дампы pg_dump (фаза 7 «Эксплуатация») — данные мира, не артефакты репозитория
 ops/backup/dumps/
 
+# Экспорты learning (ops/learning/export_learning.sh) — локальный override;
+# prod-путь /var/lib/aurwin/exports/learning вне репозитория.
+ops/learning/exports/
+
 # ОС/редакторы
 .DS_Store
 *.swp

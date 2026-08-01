@@ -1,6 +1,6 @@
 import { getWorldConstants } from "./constants.js";
 import { buildZoneLayout, zoneAt, type Zone } from "./zones.js";
-import { FishField } from "./fish.js";
+import { FishField, type FishDensitySnapshot } from "./fish.js";
 import { DayNightCycle, perceptionRadius, type Species } from "./dayNight.js";
 
 /**
@@ -42,13 +42,16 @@ export class World {
   /**
    * Восстановление после рестарта sim-engine (фаза 5, ops/DEVIATIONS.md):
    * переносит суточный цикл на уже прожитый тик мира, чтобы день/ночь не
-   * дёргались обратно к тику 0 при каждом рестарте процесса. Плотность
-   * рыбы НЕ восстанавливается (не персистентится — известный, осознанный
-   * пробел, см. ops/DEVIATIONS.md): она заново сходится к своему профилю
-   * за счёт обычного респавна, это не влияет на корректность, только на
-   * несколько первых минут доступности корма после рестарта.
+   * дёргались обратно к тику 0 при каждом рестарте процесса. Плотность рыбы
+   * восстанавливается из world_clock.fish_density (migration 015); до первой
+   * записи после миграции — стартовый профиль 1.0 в кормовых зонах.
    */
   fastForwardTo(tick: number): void {
     this.dayNight.fastForwardTo(tick);
+  }
+
+  /** Восстановление плотности рыбы из world_clock.fish_density (P3). */
+  restoreFishDensity(snapshot: FishDensitySnapshot | undefined): void {
+    if (snapshot) this.fish.restore(snapshot);
   }
 }

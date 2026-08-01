@@ -4,6 +4,8 @@ import { feedingZoneNames, type ZoneName } from "./zones.js";
 const FISH_DENSITY_CAP = 1.0;
 const FISH_DENSITY_FLOOR = 0;
 
+export type FishDensitySnapshot = Partial<Record<ZoneName, number>>;
+
 /**
  * Плотность рыбы по кормовым зонам (А.10): "распределена по кормовым зонам
  * как плотность (0..1), не отдельными объектами". Респавн поднимает
@@ -59,5 +61,24 @@ export class FishField {
     const base = this.getDensity(zone);
     if (!isNight) return base;
     return base * getWorldConstants().day_night.night_fish_availability_multiplier;
+  }
+
+  /** Снимок плотности для персистентности (world_clock.fish_density). */
+  snapshot(): FishDensitySnapshot {
+    const out = {} as FishDensitySnapshot;
+    for (const zone of feedingZoneNames()) {
+      out[zone] = this.getDensity(zone);
+    }
+    return out;
+  }
+
+  /** Восстановление плотности после рестарта sim-engine. */
+  restore(snapshot: FishDensitySnapshot): void {
+    for (const zone of feedingZoneNames()) {
+      const value = snapshot[zone];
+      if (typeof value === "number" && Number.isFinite(value)) {
+        this.density.set(zone, Math.max(FISH_DENSITY_FLOOR, Math.min(FISH_DENSITY_CAP, value)));
+      }
+    }
   }
 }

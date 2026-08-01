@@ -1,9 +1,16 @@
 name: aurwin
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: aurwin
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -47,8 +54,9 @@ services:
       context: .
       dockerfile: services/sim-engine/Dockerfile
     restart: unless-stopped
-    env_file:
-      - .env
+    logging: *default-logging
+    # env_file намеренно НЕ монтируется: .env может содержать ANTHROPIC_API_KEY,
+    # который sim-engine не использует (CLAUDE.md п.1–2). Только явные PG*-переменные.
     environment:
       # sim-engine — единственный писатель игрового состояния (А.1): пишет
       # напрямую в Postgres по имени сервиса "postgres" во внутренней сети
@@ -67,6 +75,7 @@ services:
       context: .
       dockerfile: services/reflection-worker/Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     env_file:
       - .env
     environment:
@@ -88,8 +97,8 @@ services:
       context: .
       dockerfile: services/api-gateway/Dockerfile
     restart: unless-stopped
-    env_file:
-      - .env
+    logging: *default-logging
+    # env_file намеренно НЕ монтируется — см. sim-engine выше.
     environment:
       # api-gateway — только читатель БД (А.1): те же PG*-переменные, что и
       # sim-engine, но эта служба никогда не пишет игровое состояние.
@@ -112,6 +121,7 @@ services:
         VITE_API_URL: https://aurwin.ru
         VITE_WS_URL: wss://aurwin.ru/ws
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "127.0.0.1:5173:5173"
     depends_on:
@@ -125,6 +135,7 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "80:80"
       - "443:443"
@@ -146,6 +157,7 @@ services:
       context: .
       dockerfile: services/db/Dockerfile
     profiles: ["tools"]
+    logging: *default-logging
     environment:
       PGHOST: postgres
       PGPORT: "5432"
@@ -162,6 +174,7 @@ services:
   prometheus:
     image: prom/prometheus:v2.55.1
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ./ops/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./ops/observability/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
@@ -175,6 +188,7 @@ services:
   alertmanager:
     image: prom/alertmanager:v0.27.0
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ./ops/observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     ports:
@@ -183,6 +197,7 @@ services:
   grafana:
     image: grafana/grafana:11.2.0
     restart: unless-stopped
+    logging: *default-logging
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
       GF_USERS_ALLOW_SIGN_UP: "false"

@@ -1,69 +1,152 @@
-import { useState } from "react";
-import { PixiWorld } from "./render/PixiWorld";
+import { useCallback, useEffect, useState } from "react";
+import { ObservatoryWorld } from "./world/ObservatoryWorld";
 import { useWorldSocket } from "./ws/useWorldSocket";
-import { CreatureCard } from "./components/CreatureCard";
+import { CreatureCardPanel } from "./components/CreatureCard";
 import { SocialGraph } from "./components/SocialGraph";
+import { fetchWorldStats, type WorldStats } from "./api/client";
+import { Tabs } from "./ds/Tabs";
+import { Dialog } from "./ds/Dialog";
+import { EmotionIndicator, type EmotionKind } from "./ds/EmotionIndicator";
+import { IconButton, MoonIcon, SunIcon } from "./ds/IconButton";
+import { formatWorldAge } from "./world/worldAge";
 
-const EMOTION_LEGEND = [
-  { cls: "calm", label: "Спокоен" },
-  { cls: "playful", label: "Игрив" },
-  { cls: "afraid", label: "Напуган" },
-  { cls: "grieving", label: "Скорбит" },
-] as const;
+const EMOTION_LEGEND: Array<{ emotion: EmotionKind; label: string }> = [
+  { emotion: "calm", label: "Спокоен" },
+  { emotion: "playful", label: "Игрив" },
+  { emotion: "afraid", label: "Напуган" },
+  { emotion: "grieving", label: "Скорбит" },
+];
+
+const HINT_KEY = "aurwin-observatory-hint-dismissed";
 
 export function App() {
   const { store, status, tick, phase, errorMessage, setViewport } = useWorldSocket();
+  const [tab, setTab] = useState<"world" | "social">("world");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [showSocialGraph, setShowSocialGraph] = useState(false);
+  const [selectedName, setSelectedName] = useState("");
+  const [stats, setStats] = useState<WorldStats | null>(null);
+  const [hintVisible, setHintVisible] = useState(() => {
+    try {
+      return !localStorage.getItem(HINT_KEY);
+    } catch {
+      return true;
+    }
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+    function load() {
+      fetchWorldStats()
+        .then((s) => !cancelled && setStats(s))
+        .catch(() => undefined);
+    }
+    load();
+    const id = window.setInterval(load, 15000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
+
+  function dismissHint() {
+    try {
+      localStorage.setItem(HINT_KEY, "1");
+    } catch {
+      /* ignore */
+    }
+    setHintVisible(false);
+  }
+
+  const penguins = stats?.population.penguin ?? "—";
+  const orcas = stats?.population.orca ?? "—";
+  const phaseHint = phase === "day" ? "Светлая половина суток — колония кормится" : "Большая часть колонии спит";
+  const ageLabel = formatWorldAge(tick, store.tickSeconds);
+
+  const onSelectCreature = useCallback(
+    (id: string) => {
+      setSelectedId(id);
+      setSelectedName(store.creatureName(id) ?? "");
+    },
+    [store],
+  );
 
   return (
-    <main className="app" data-theme={phase === "night" ? "night" : "day"}>
-      <PixiWorld store={store} onSelectCreature={setSelectedId} onViewportChange={setViewport} />
-
-      <header className="hud">
-        <span className="hud__brand">Aurwin</span>
-        <span className={`hud__phase hud__phase--${phase}`}>{phase === "night" ? "ночь" : "день"}</span>
-        <span className="hud__tick">тик {tick}</span>
-        <span className={`hud__status hud__status--${status}`}>
-          {status === "open"
-            ? "на связи"
-            : status === "connecting"
-              ? "подключение…"
-              : status === "rejected"
-                ? "отказано"
-                : "переподключение…"}
-        </span>
-        <button className="hud__button" type="button" onClick={() => setShowSocialGraph((v) => !v)}>
-          {showSocialGraph ? "скрыть соцкарту" : "кто с кем дружит"}
-        </button>
+    <div className="observatory" data-theme={phase === "night" ? "night" : "day"}>
+      <header className="observatory__header">
+        <div className="observatory__header-left">
+          <span className="observatory__brand">Aurwin</span>
+          <Tabs
+            value={tab}
+            onChange={(v) => setTab(v as "world" | "social")}
+            items={[
+              { value: "world", label: "Мир" },
+              { value: "social", label: "Кто с кем дружит" },
+            ]}
+          />
+        </div>
+        <div className="observatory__header-right">
+          <div className="observatory__meta">
+            <span>
+              {ageLabel} · {penguins} пингвинов · {orcas} касаток
+            </span>
+            <span className="observatory__meta-hint">
+              {status === "open" ? phaseHint : status === "connecting" ? "подключение к миру…" : "связь восстанавливается…"}
+            </span>
+          </div>
+          <IconButton label={phase === "night" ? "Сейчас ночь" : "Сейчас день"} active>
+            {phase === "night" ? <MoonIcon /> : <SunIcon />}
+          </IconButton>
+        </div>
       </header>
 
-      {errorMessage && <div className="hud__error">{errorMessage}</div>}
-
-      {!showSocialGraph && (
-        <div className="emotion-legend" aria-label="легенда эмоций">
-          {EMOTION_LEGEND.map((row) => (
-            <div key={row.cls} className="emotion-legend__row">
-              <span className={`emotion-dot emotion-dot--${row.cls}`} />
-              {row.label}
+      <main className="observatory__main">
+        {tab === "world" ? (
+          <>
+            <ObservatoryWorld
+              store={store}
+              onSelectCreature={onSelectCreature}
+              onViewportChange={setViewport}
+              focusCreatureId={selectedId}
+            />
+            <div className="observatory__legend" aria-label="легенда эмоций">
+              {EMOTION_LEGEND.map((row) => (
+                <div key={row.emotion} className="observatory__legend-row">
+                  <EmotionIndicator emotion={row.emotion} size={8} />
+                  {row.label}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      )}
+            {hintVisible && (
+              <div className="observatory__hint">
+                Перетащите карту и кликните на существо, чтобы узнать о нём больше
+                <button type="button" onClick={dismissHint} aria-label="Закрыть подсказку" className="observatory__hint-close">
+                  ×
+                </button>
+              </div>
+            )}
+          </>
+        ) : (
+          <SocialGraph onSelectCreature={onSelectCreature} active={tab === "social"} />
+        )}
+      </main>
 
-      {selectedId && <CreatureCard creatureId={selectedId} onClose={() => setSelectedId(null)} />}
-      {showSocialGraph && (
-        <SocialGraph
-          onClose={() => setShowSocialGraph(false)}
-          onSelectCreature={(id) => {
-            setSelectedId(id);
-          }}
-        />
-      )}
+      {errorMessage && <div className="observatory__error">{errorMessage}</div>}
 
-      <footer className="hud-hint">
-        Перетаскивайте карту мышью, крутите колесо для приближения, кликните по существу для карточки.
-      </footer>
-    </main>
+      <Dialog
+        open={!!selectedId}
+        title={selectedName || "Существо"}
+        onClose={() => {
+          setSelectedId(null);
+          setSelectedName("");
+        }}
+      >
+        {selectedId && (
+          <CreatureCardPanel
+            creatureId={selectedId}
+            onName={(name) => setSelectedName(name)}
+          />
+        )}
+      </Dialog>
+    </div>
   );
 }

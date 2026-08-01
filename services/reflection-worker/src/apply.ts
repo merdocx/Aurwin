@@ -80,6 +80,9 @@ function intentionsToDbJson(intentions: ResolvedIntention[]): unknown {
     if (intention.effect.approach_bonus) effect.approach_bonus = { creature: intention.effect.approach_bonus.creatureId, value: intention.effect.approach_bonus.value };
     if (intention.effect.avoid_creature) effect.avoid_creature = { creature: intention.effect.avoid_creature.creatureId, value: intention.effect.avoid_creature.value };
     if (intention.effect.seek_mate !== undefined) effect.seek_mate = intention.effect.seek_mate;
+    if (intention.effect.prefer_zone) effect.prefer_zone = intention.effect.prefer_zone;
+    if (intention.effect.avoid_zone) effect.avoid_zone = intention.effect.avoid_zone;
+    if (intention.effect.hunt_with) effect.hunt_with = intention.effect.hunt_with;
     return { text: intention.text, effect };
   });
 }
@@ -167,6 +170,50 @@ export async function applyReflectionResult(
         params.currentTick,
       ],
     );
+    await client.query(`INSERT INTO trait_history (creature_id, tick, traits, source) VALUES ($1, $2, $3, 'reflection')`, [
+      params.creatureId,
+      params.currentTick,
+      JSON.stringify(newTraits),
+    ]);
+
+    // Batch learning_events: trait_delta / weight_delta / reflection_applied.
+    // Пишется на пути reflection-worker (не блокирует тик sim-engine).
+    const learningRows: Array<{ kind: string; payload: Record<string, unknown> }> = [
+      {
+        kind: "reflection_applied",
+        payload: {
+          reflection_id: params.reflectionId,
+          episode_ids: params.mergedEpisodeIds,
+          narrative: params.validated.narrative,
+        },
+      },
+    ];
+    if (Object.keys(params.validated.traitDeltas).length > 0) {
+      learningRows.push({
+        kind: "trait_delta",
+        payload: { deltas: params.validated.traitDeltas, traits: newTraits },
+      });
+    }
+    if (Object.keys(params.validated.weightDeltas).length > 0) {
+      learningRows.push({
+        kind: "weight_delta",
+        payload: { deltas: params.validated.weightDeltas },
+      });
+    }
+    {
+      const values: unknown[] = [];
+      const placeholders: string[] = [];
+      for (const rowEv of learningRows) {
+        const base = values.length;
+        placeholders.push(`($${base + 1}::bigint, $${base + 2}::uuid, $${base + 3}::text, $${base + 4}::jsonb)`);
+        values.push(params.currentTick, params.creatureId, rowEv.kind, JSON.stringify(rowEv.payload));
+      }
+      await client.query(
+        `INSERT INTO learning_events (tick, creature_id, kind, payload) VALUES ${placeholders.join(", ")}`,
+        values,
+      );
+    }
+
     await client.query(`UPDATE reflections SET status = 'applied', applied_at = now() WHERE id = $1`, [params.reflectionId]);
     await markEpisodesConsumed(client, params.mergedEpisodeIds);
     await client.query("COMMIT");

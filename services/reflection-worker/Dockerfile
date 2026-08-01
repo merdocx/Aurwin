@@ -15,4 +15,5 @@ COPY services/reflection-worker ./services/reflection-worker
 COPY config ./config
 
 WORKDIR /app/services/reflection-worker
-CMD ["npm", "run", "dev"]
+RUN npm run build
+CMD ["npm", "run", "start"]

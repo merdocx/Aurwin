@@ -5,7 +5,7 @@ import { randomTraits, randomChronotype } from "./traits.js";
 import { computeAuthority } from "./authority.js";
 import { realDaysToTicks } from "./time.js";
 import { ageStageFor } from "./lifecycle.js";
-import { buildZoneLayout, zoneAt } from "../world/zones.js";
+import { ecoZoneAtSim, sampleLandSim, sampleWaterSim } from "../world/landMask.js";
 import {
   SKILL_KEYS,
   type Creature,
@@ -39,11 +39,9 @@ export function defaultWeights(species: Species): DecisionWeights {
 }
 
 function spawnPosition(species: Species, rng: Rng): Vector2 {
-  const zones = buildZoneLayout();
-  const zoneName = species === "penguin" ? "main_ice" : "open_water";
-  const zone = zones.find((z) => z.name === zoneName);
-  if (!zone) throw new Error(`spawnPosition: зона ${zoneName} не найдена`);
-  return { x: rng.range(zone.x0, zone.x1), y: rng.range(zone.y0, zone.y1) };
+  const r = () => rng.range(0, 1);
+  if (species === "penguin") return sampleLandSim(r);
+  return sampleWaterSim(r);
 }
 
 export interface GenesisOptions {
@@ -51,6 +49,11 @@ export interface GenesisOptions {
   rng: Rng;
   nameGen: NameGenerator;
   nextId: () => string;
+}
+
+/** Короткая публичная отправная точка жизни; полный self-narrative создаёт рефлексия позже. */
+export function starterNarrativeFact(kind: "genesis" | "birth"): string {
+  return kind === "genesis" ? "Я молод и только начинаю узнавать этот мир." : "Сегодня мой первый день в этом мире.";
 }
 
 /**
@@ -88,7 +91,7 @@ export function createGenesisCreature(species: Species, sex: Sex, opts: GenesisO
     bornAtTick,
     pos,
     velocity: { x: 0, y: 0 },
-    zone: zoneAt(pos.x, pos.y).name,
+    zone: ecoZoneAtSim(pos.x, pos.y),
     traits,
     traitsBirth: { ...traits },
     needs: { ...constants.population.genesis_initial_needs },
@@ -97,6 +100,7 @@ export function createGenesisCreature(species: Species, sex: Sex, opts: GenesisO
     skills: randomSkills(rng),
     chronotype: randomChronotype(rng),
     isAsleep: false,
+    activity: "idle",
     ageStage: ageStageFor(species, ageWeeks),
     authority: 0,
     habits: {},
@@ -111,7 +115,7 @@ export function createGenesisCreature(species: Species, sex: Sex, opts: GenesisO
     trust: new Map(),
     cohortId: `${species}-genesis`,
     actionCounts: {},
-    narrativeFacts: [],
+    narrativeFacts: [starterNarrativeFact("genesis")],
   };
   creature.authority = computeAuthority(creature, ageWeeks);
   return creature;

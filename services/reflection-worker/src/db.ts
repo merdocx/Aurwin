@@ -1,4 +1,5 @@
 import type { Pool } from "pg";
+import { ageStageFor, ageWeeksAt } from "./age.js";
 import { getConstants } from "./constants.js";
 import type {
   AversionSummary,
@@ -24,16 +25,28 @@ import type {
  * бы отдельного счётчика, которого нет в схеме episodes; дебаунс (4ч) и
  * глобальные лимиты (30/час, 120/сутки) не дают этому упрощению разогнать
  * бюджет (см. ops/DEVIATIONS.md, фаза 6).
+ *
+ * Маршрутизация модели: EVENT_SONNET_TRIGGER_TYPES → Sonnet;
+ * EVENT_HAIKU_TRIGGER_TYPES → Haiku (ops/DEVIATIONS.md, LLM cost opt).
  */
-export const EVENT_TRIGGER_TYPES = [
+/**
+ * Событийные триггеры на Sonnet (глубокая рефлексия, 7.3): смерть близкого,
+ * дружба, возрастные вехи. Частые/рутинные birth и hunt_success идут на
+ * Haiku — см. EVENT_HAIKU_TRIGGER_TYPES и modelForEvent в anthropic.ts
+ * (ops/DEVIATIONS.md, LLM cost opt).
+ */
+export const EVENT_SONNET_TRIGGER_TYPES = [
   "friend_died",
-  "hunt_success",
-  "birth",
   "bond_formed",
   "bond_broken",
   "matured",
   "grew_old",
 ] as const;
+
+/** Частые событийные триггеры — дешёвая модель (Haiku), не Sonnet. */
+export const EVENT_HAIKU_TRIGGER_TYPES = ["birth", "hunt_success"] as const;
+
+export const EVENT_TRIGGER_TYPES = [...EVENT_SONNET_TRIGGER_TYPES, ...EVENT_HAIKU_TRIGGER_TYPES] as const;
 
 /** Короткие описания типов эпизодов для читаемого `context` в new_episodes (А.5). Тон — сдержанный (7.3). */
 const EPISODE_TYPE_LABELS: Record<string, string> = {
@@ -75,9 +88,9 @@ export async function findDueBackgroundCandidates(pool: Pool): Promise<string[]>
  */
 export async function findDueEventCandidates(pool: Pool): Promise<string[]> {
   const hours = getConstants().reflection.event_debounce_hours;
-  const result = await pool.query<{ creature_id: string }>(
+  const result = await pool.query<{ creature_id: string; species: "penguin" | "orca"; born_at_tick: string | number }>(
     `
-    SELECT e.creature_id, min(e.created_at) AS oldest
+    SELECT e.creature_id, c.species, c.born_at_tick, min(e.created_at) AS oldest
     FROM episodes e
     JOIN creatures c ON c.id = e.creature_id
     WHERE c.died_at_tick IS NULL
@@ -88,12 +101,20 @@ export async function findDueEventCandidates(pool: Pool): Promise<string[]> {
         WHERE r.creature_id = e.creature_id AND r.kind = 'event'
           AND r.created_at > now() - ($2::text || ' hours')::interval
       )
-    GROUP BY e.creature_id
+    GROUP BY e.creature_id, c.species, c.born_at_tick
     ORDER BY oldest ASC
     `,
     [EVENT_TRIGGER_TYPES as unknown as string[], hours],
   );
-  return result.rows.map((r) => r.creature_id);
+  // 7.4: детёныш — «рефлексия только фоновая»; событийную не ставим в очередь.
+  const tick = await fetchWorldTick(pool);
+  const visualTickSeconds = getConstants().time.visual_tick_seconds;
+  return result.rows
+    .filter((r) => {
+      const weeks = ageWeeksAt(Number(r.born_at_tick), tick, visualTickSeconds);
+      return ageStageFor(r.species, weeks) !== "juvenile";
+    })
+    .map((r) => r.creature_id);
 }
 
 /** Считает событийные рефлексии за скользящее окно — для глобальных лимитов 30/час и 120/сутки (7.3). */
@@ -280,6 +301,20 @@ export async function insertQueuedReflection(pool: Pool, row: ReflectionRowInser
   const result = await pool.query<{ id: string }>(
     `INSERT INTO reflections (creature_id, kind, status, merged_episode_ids, request) VALUES ($1, $2, 'queued', $3, $4) RETURNING id`,
     [row.creatureId, row.kind, row.mergedEpisodeIds, JSON.stringify(row.request)],
+  );
+  return result.rows[0].id;
+}
+
+/**
+ * Пустая фоновая рефлексия: нет непоглощённых эпизодов — LLM не вызываем,
+ * но пишем строку reflections, чтобы NOT EXISTS в findDueBackgroundCandidates
+ * уважал interval и воркер не крутился вхолостую каждые N минут.
+ */
+export async function insertSkippedEmptyBackground(pool: Pool, creatureId: string): Promise<string> {
+  const result = await pool.query<{ id: string }>(
+    `INSERT INTO reflections (creature_id, kind, status, merged_episode_ids, request, response)
+     VALUES ($1, 'background', 'discarded', '{}', $2, $3) RETURNING id`,
+    [creatureId, JSON.stringify({ skipped: "empty_background" }), JSON.stringify({ skipped: true, reason: "empty_background" })],
   );
   return result.rows[0].id;
 }

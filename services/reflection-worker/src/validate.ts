@@ -15,6 +15,9 @@ export interface ResolvedIntentionEffect {
   approach_bonus?: { creatureId: string; value: number };
   avoid_creature?: { creatureId: string; value: number };
   seek_mate?: boolean;
+  prefer_zone?: string;
+  avoid_zone?: string;
+  hunt_with?: string;
 }
 
 export interface ResolvedIntention {
@@ -137,6 +140,10 @@ function resolveCreatureRef(
   const id = ctx.nameToId.get(name);
   if (!id) return undefined;
   return { creatureId: id, value };
+}
+
+function resolveCreatureId(raw: unknown, ctx: ValidationContext): string | undefined {
+  return typeof raw === "string" ? ctx.nameToId.get(raw) : undefined;
 }
 
 /**
@@ -285,6 +292,23 @@ export function validateReflectionResponse(raw: string, ctx: ValidationContext):
             break;
           }
           effect[key] = resolved;
+        } else if (key === "prefer_zone" || key === "avoid_zone") {
+          const rawZone = rawEffect[key];
+          const canonical = typeof rawZone === "string" ? canonicalizeZone(rawZone, ctx.knownZones) : undefined;
+          if (!canonical) {
+            errors.push(`intentions[].effect.${key}: недопустимая зона`);
+            intentionValid = false;
+            break;
+          }
+          effect[key] = canonical;
+        } else if (key === "hunt_with") {
+          const creatureId = resolveCreatureId(rawEffect[key], ctx);
+          if (!creatureId) {
+            errors.push("intentions[].effect.hunt_with: ссылка на несуществующее существо (7.8.6/А.5)");
+            intentionValid = false;
+            break;
+          }
+          effect.hunt_with = creatureId;
         } else if (key === "seek_mate") {
           if (typeof rawEffect[key] !== "boolean") {
             errors.push("intentions[].effect.seek_mate: не boolean");

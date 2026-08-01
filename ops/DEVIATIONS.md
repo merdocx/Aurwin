@@ -392,18 +392,14 @@
      периодически затирал бы в памяти intentions/narrative, применённые
      реальным reflection-worker (единственный писатель ЭТИХ полей в
      рамках одного процесса должен быть один).
-   - Известный оставшийся разрыв (честно не выдаётся за решённое): живой
-     `sim-engine`-процесс держит СВОЮ in-memory копию `Creature`
-     (используется в utility AI каждый тик) и не перечитывает результат
-     reflection-worker "на лету" в рамках одного запуска — только при
-     следующем рестарте (через `restore.ts`, который уже читает все 6
-     полей). То есть дрейф черт/весов/намерений переживает рестарт
-     процесса (персистентность не нарушена), но НЕ влияет на решения
-     ТЕКУЩЕГО работающего процесса sim-engine до его следующего рестарта.
-     Полноценная живая синхронизация (sim-engine перечитывает
-     `reflections`/`creatures` каждый тик или каждые N тиков) — открытый
-     пункт для следующей фазы, не входящий в обязательные артефакты
-     фазы 6 (все они — internal `services/reflection-worker/*`).
+   - **Закрыто (P0 live-sync):** `services/sim-engine/src/persistence/
+     reloadReflection.ts` — раз в `time.snapshot_interval_ticks` (как полный
+     снапшот) sim-engine SELECT-ит из `creatures` строки с
+     `last_reflection_at > watermark` и обновляет in-memory
+     `traits/weights/intentions/narrative_facts/narrative/lastReflectionAt`
+     до `sim.tick()`, чтобы utility AI видел результат reflection-worker без
+     рестарта. Полный upsert по-прежнему исключает reflection-owned колонки
+     из SET (см. `REFLECTION_OWNED_COLUMNS` в `persist.ts`).
 
 4. **reflection-worker дублирует мелкие утилиты (`constants.ts`, `pool.ts`,
    `age.ts`) вместо импорта `@aurwin/db`/`@aurwin/sim-engine`.** Тот же
@@ -832,3 +828,146 @@ ANY(...)`) созданных этим тестом строк в его кон�
 3. **Синонимы зон** (`deep_water` → `open_water` и др.) нормализуются в
    `canonicalizeZone` до проверки whitelist; в system prompt явно перечислены
    канонические зоны.
+
+## 2026-07-31 — карта UX: separation + sleep-on-ice
+
+1. **`movement.separation.*`** — мягкое расталкивание живых особей после
+   шага движения (sim-engine). ТЗ не требует физической коллизии фигурок;
+   добавлено для читаемости карты. Охота исключена из расталкивания, чтобы
+   не ломать контактный радиус `hunting.contact_radius_units`.
+
+2. **Сон пингвина только на `ice`** — utility AI не предлагает `sleep` на воде;
+   `resolveSleepToggle` принудительно снимает sleep вне льда. Согласует
+   поведение с визуалом Observatory (сон/ходьба только на суше).
+
+## 2026-07-31 — единая маска земли DS
+
+Авторитет ice/water больше не вертикальные полосы `zones.ts`, а контуры
+Design System (`landMask.ts` / `continents.ts`): MAIN_LAND, FAR_ICE,
+THIRD_LAND, MEDIUM_SEEDS, SMALL_BERGS. Именованные зоны — мягкие eco-регионы
+для рыбы/привычек. Движение, сон пингвина, clamp касаток — от маски.
+
+## 2026-07-31 — P1 personality AI (emotion + aversion/threat utility)
+
+1. **`emotion.ts` — эвристические дельты valence/arousal** на ключевых событиях
+   (охота успех/провал, выживание жертвы, смерть друга-свидетеля, рождение
+   потомства, пробуждение по тревоге). Числа не в `constants.yaml`: это
+   поведенческие эвристики P1, не баланс экосистемы А.9; clamp −1..1 / 0..1
+   в `applyEmotionDelta`.
+
+2. **`utilityAI.ts` — `perceivedZoneThreat`** в выборе кормовой зоны и
+   `goto_food`; **aversion** снижает socialize/approach и усиливает flee от
+   касаток с историей преследования (не только court).
+
+## 2026-07-31 — P2 perf + security hardening
+
+1. **LOD спрайтов (`CreatureSprites.simplified`)** — при масштабе карты
+   `< 0.55` (PanZoom `onScaleChange`) рендерятся 1–2 path-силуэта вместо
+   полного SVG; порог не в `constants.yaml` — UI-порог производительности,
+   не баланс симуляции.
+
+2. **RAF при `document.hidden`** — цикл позиций полностью останавливается,
+   не перепланируется до `visibilitychange` → visible (экономия CPU в фоновой
+   вкладке).
+
+3. **Docker CMD `npm run start`** — production-образы собирают `tsc` и
+   запускают `node dist/index.js` без watch; локальный DX — `npm run dev`.
+
+4. **docker-compose: без `env_file` на sim-engine/api-gateway** — только
+   явные `PG*` из `${POSTGRES_PASSWORD}`; `ANTHROPIC_API_KEY` остаётся только
+   у `reflection-worker` через `env_file: .env`.
+
+5. **Caddy security headers** — HSTS, X-Frame-Options, nosniff, Referrer-Policy,
+   базовый CSP (`default-src 'self'`).
+
+6. **WS message rate limit** — `WsMessageRateLimiter`, 20 msg/s на клиента;
+   лишние viewport-сообщения молча игнорируются (соединение не рвётся).
+
+## 2026-07-31 — P3 ecosystem (реинтродукция, персистентность рыбы/размножения)
+
+1. **Реинтродукция (7.4)** — реализована в `sim/reintroduction.ts` +
+   `Simulation.checkReintroductionStep()` после смертей тика. Пороги из
+   `population.reintroduction` (`reintroduce_at: 0`). Когорта = те же числа,
+   что `population.genesis` (40 пингвинов / 4 касатки). Кулдаун между
+   повторными реинтродукциями одного вида — `reproduction.cooldown_inner_days`
+   (отдельной константы в А.9 нет; переиспользован существующий кулдаун
+   размножения как инженерный предохранитель от спама). Событие мира:
+   `type: reintroduction`; каждый случай логируется в stderr sim-engine и
+   требует записи в `ops/BALANCE_LOG.md`.
+
+2. **`world_clock.fish_density` (JSONB, migration 015)** — плотность рыбы
+   по кормовым зонам; пишется вместе с `updateWorldClock` каждый тик.
+   Закрывает осознанный пробел фазы 7 (world.ts: «рыба не персистится»).
+
+3. **`creatures.last_reproduced_at_tick` (BIGINT, migration 015)** —
+   восстанавливается при рестарте; попадает в полный upsert существ
+   (`snapshot_interval_ticks`). Между полными снапшотами возможна потеря
+   ≤ ~1 минуты (как и для прочих полей полного снапшота).
+
+## 2026-07-31 — LLM cost optimizations (reflection-worker)
+
+Отклонения/уточнения к 7.3/7.6 ради бюджета (~$0.40/день):
+
+1. **Событийная модель не всегда Sonnet.** `birth` и `hunt_success` →
+   Haiku (`models.background`); Sonnet остаётся для `friend_died`,
+   `bond_formed`, `bond_broken`, `matured`, `grew_old`. При слиянии окна
+   с хотя бы одним Sonnet-триггером — Sonnet. См.
+   `EVENT_HAIKU_TRIGGER_TYPES` / `modelForEvent` в reflection-worker.
+
+2. **Пустой фон пропускается.** Если у due-кандидата нет unconsumed
+   эпизодов — LLM не вызывается; пишется `reflections` со статусом
+   `discarded` (`skipped: empty_background`), чтобы
+   `background_interval_hours` не крутился вхолостую. 7.3 формально
+   требует фон раз в 24ч «для всех» — ослаблено: пустой backlog не
+   тратит токены.
+
+3. **Детёныш = только фон** — уже в 7.4; реализовано фильтром juvenile
+   в `findDueEventCandidates` (раньше событийная очередь не смотрела на
+   стадию).
+
+4. **`estimateCostUsd(..., { batch: true })` ×0.5** — учёт скидки Batch
+   API в метриках (7.6).
+
+5. **Prompt cache на Batch:** `cache_control: ephemeral` на system +
+   `anthropic-beta: prompt-caching-2024-07-31` (раньше cache_*_tokens=0
+   на Batch без beta — см. фазу 6).
+
+## 2026-07-31 — steering, activity, light upsert
+
+1. **`movement.steering` (constants.yaml)** — числа не выписаны в А.9/А.10;
+   инженерные параметры плавного рулевого управления (ограничение поворота,
+   инерция wander, замедление у цели, гистерезис смены действия). RAM-only
+   поля `heading`, `wanderHeadingTicks`, `actionCommitTicks`, `lastMedium`
+   не персистятся.
+
+2. **`creatures.activity` (TEXT, migration 016)** — наблюдаемый режим
+   (walk/swim/hunt/forage/transit_*/idle) для WS delta; не входит в дословный
+   список А.2, но нужен наблюдателю (А.6) без передачи внутренних углов.
+
+3. **Light upsert без INSERT** — `persist.ts` режим `light` делает только
+   batch UPDATE по `(id, pos_x, pos_y, zone, emotion, is_asleep, activity)`.
+   Новорождённые попадают в БД через full snapshot или `persistGenesis`.
+
+4. **`movement.separation.max_nudge_units`** — потолок суммарного сдвига
+   особи за одну итерацию separation; дополнение к существующим радиусам.
+
+## 2026-08-01 — касание = съел; удача до контакта
+
+**Отклонение от А.10** («охота вероятностная при контакте», base ~0.35):
+
+1. **При физическом касании** (`dist ≤ contact_radius` = сумма
+   `body_radius`) и охотничьем action (`hunt` / `stealth_approach` /
+   `coordinate_hunt`) исход всегда `caught=true`. Куб на контакте убран —
+   иначе спрайты стопились на «промахе».
+
+2. **Удача и навыки живут до контакта:**
+   - `rollHuntNotice` (evasion × perceived threat) → commit `flee` в том
+     же тике, пока дистанция в полосе `contact + approach_band`.
+   - group (≥3) / `guard_offspring` → `applyPreContactDefense` (nudge
+     жертвы от охотника); `coordinate_hunt` отменяет срыв.
+   - Промах-эпизоды пишутся при срыве, не при «коснулись и не съели».
+
+3. **`world.base_hunt_success_probability: 1.0`** — legacy-поле; на исход
+   контакта не влияет (`resolveHunt` всегда caught).
+
+4. Separation-exemption для hunt-пар снят; радиусы = `body_radius_units`.

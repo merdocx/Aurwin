@@ -237,6 +237,8 @@ export function setPopulationGauges(sim: Simulation): void {
   const bySpecies: Record<Species, Creature[]> = { penguin: [], orca: [] };
   for (const c of alive) bySpecies[c.species].push(c);
 
+  const computeDivergence = sim.currentTick % 15 === 0;
+
   for (const species of SPECIES) {
     const group = bySpecies[species];
     population.set({ species }, group.length);
@@ -255,7 +257,9 @@ export function setPopulationGauges(sim: Simulation): void {
     sleepingRatio.set({ species, phase }, group.length > 0 ? asleep / group.length : 0);
     avgSleepPressure.set({ species }, meanStddev(group.map((c) => c.needs.sleep_pressure)).mean);
 
-    behavioralDivergence.set({ species }, cohortDivergence(group));
+    if (computeDivergence) {
+      behavioralDivergence.set({ species }, cohortDivergence(group));
+    }
   }
 
   for (const [signalType, count] of Object.entries(sim.acc.signalsSent)) {

@@ -16,7 +16,7 @@ export const HUNT_ATTRACTIVENESS_KEYS = ["w_vigor", "w_dist", "w_group", "w_stag
 export const WEIGHT_SCALAR_PATHS = ["w_trait", "w_skill", "w_habit"] as const;
 
 /** Белый список машинно-применимых эффектов намерения (А.5). */
-export const INTENTION_EFFECT_KEYS = ["zone_penalty", "zone_bonus", "approach_bonus", "avoid_creature", "seek_mate"] as const;
+export const INTENTION_EFFECT_KEYS = ["zone_penalty", "zone_bonus", "approach_bonus", "avoid_creature", "seek_mate", "prefer_zone", "avoid_zone", "hunt_with"] as const;
 export type IntentionEffectKey = (typeof INTENTION_EFFECT_KEYS)[number];
 
 export type ReflectionKind = "background" | "event";
@@ -111,6 +111,9 @@ export interface IntentionEffect {
   approach_bonus?: { creature: string; value: number };
   avoid_creature?: { creature: string; value: number };
   seek_mate?: boolean;
+  prefer_zone?: string;
+  avoid_zone?: string;
+  hunt_with?: string;
 }
 
 export interface Intention {

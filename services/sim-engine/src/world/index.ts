@@ -3,6 +3,16 @@ export type { WorldConstants } from "./constants.js";
 
 export { buildZoneLayout, zoneAt, feedingZoneNames, resetZoneLayoutCache } from "./zones.js";
 export type { Zone, ZoneName, ZoneType } from "./zones.js";
+export {
+  isLandSim,
+  mediumAtSim,
+  ecoZoneAtSim,
+  ecoZoneCenterSim,
+  isLandMap,
+  toMap,
+  toSim,
+} from "./landMask.js";
+
 
 export { FishField } from "./fish.js";
 

@@ -57,6 +57,10 @@ export interface SimConstants {
       w_skill: number;
       w_habit: number;
     };
+    intention_effects: {
+      zone_preference: number;
+      hunt_with_bonus: number;
+    };
   };
   world: {
     map: { width: number; height: number };
@@ -80,7 +84,30 @@ export interface SimConstants {
     water_speed: { penguin: number; orca: number };
     ice_speed: { penguin: number };
     old_age_speed_multiplier: number;
+    action_speed_multipliers: {
+      hunt: number;
+      coordinate_hunt: number;
+      flee: number;
+      stealth_approach: number;
+    };
+    body_radius_units: { penguin: number; orca: number };
     stealth_approach: { speed_multiplier: number; perceived_threat_multiplier: number };
+    steering: {
+      max_turn_rad_per_tick: number;
+      wander_persistence_ticks: number;
+      wander_jitter_rad: number;
+      action_commit_ticks: number;
+      action_hysteresis_utility: number;
+      arrival_slow_radius_units: number;
+    };
+    separation: {
+      penguin_radius_units: number;
+      orca_radius_units: number;
+      iterations: number;
+      max_nudge_units: number;
+      position_nudge_multiplier: number;
+      heading_nudge_weight: number;
+    };
   };
   decision_log: { sampled_creatures_count: number; ttl_days: number };
   skills: {
@@ -116,6 +143,7 @@ export interface SimConstants {
       penguin: { day: number; night: number };
       orca: { day: number; night: number };
     };
+    hearing_radius: { penguin: number; orca: number };
     asleep_perception_multiplier: { penguin: number; orca: number };
     night_fish_availability_multiplier: number;
     sleep_energy_recovery_multiplier: number;
@@ -138,6 +166,12 @@ export interface SimConstants {
     trait_mutation_stddev: number;
     chronotype_mutation_stddev: number;
     expressiveness_mutation_stddev: number;
+    culture_inherit: {
+      habit_weight: number;
+      habit_noise_amplitude: number;
+      weights_blend: number;
+      skill_seed: number;
+    };
   };
   foraging: {
     base_success_probability: number;
@@ -145,7 +179,19 @@ export interface SimConstants {
     hunger_reduction_per_meal: number;
   };
   hunting: {
+    prey_threat: {
+      baseline: number;
+      visible_floor: number;
+      hunt_bump: number;
+      flee_proximity_weight: number;
+      social_suppress: number;
+    };
     contact_radius_units: number;
+    pre_contact: {
+      approach_band_extra_units: number;
+      defense_nudge_units: number;
+      break_cooldown_ticks: number;
+    };
     reattempt_cooldown_real_minutes: number;
     juvenile_prey_multiplier: number;
     old_prey_multiplier: number;

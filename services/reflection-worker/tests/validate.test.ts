@@ -114,6 +114,24 @@ describe("validate.ts: контракт выхода А.5 — базовая ф�
     expect(result.value?.intentions[0].effect.approach_bonus?.creatureId).toBe("friend-id");
   });
 
+  it("разрешает prefer_zone/avoid_zone и hunt_with, резолвя существо в UUID", () => {
+    const result = validateReflectionResponse(
+      validResponse({
+        intentions: [
+          {
+            text: "охотиться с Пин вдали от бухты",
+            effect: { prefer_zone: "south_shallows", avoid_zone: "north_bay", hunt_with: "Пин" },
+          },
+        ],
+      }),
+      baseCtx(),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.value?.intentions[0].effect.prefer_zone).toBe("south_shallows");
+    expect(result.value?.intentions[0].effect.avoid_zone).toBe("north_bay");
+    expect(result.value?.intentions[0].effect.hunt_with).toBe("friend-id");
+  });
+
   it("отклоняет narrative_facts длиннее max_narrative_facts", () => {
     const facts = Array.from({ length: 10 }, (_, i) => `факт ${i}`);
     const result = validateReflectionResponse(validResponse({ narrative_facts: facts }), baseCtx());

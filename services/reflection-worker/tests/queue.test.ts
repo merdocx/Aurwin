@@ -3,6 +3,16 @@ import { ensureMigratedUp, getTestPool, insertCreature } from "../../db/tests/he
 import { countRecentEventReflections, findDueBackgroundCandidates, findDueEventCandidates, fetchUnconsumedEpisodes } from "../src/db.js";
 import { selectCandidates } from "../src/queue.js";
 
+/** born_at=0 + этот tick → взрослый пингвин (juvenile < 1.5 нед ≈ 64800 тиков при visual_tick=2с). */
+const ADULT_TICK = 100_000;
+
+async function ensureAdultWorldTick(pool: ReturnType<typeof getTestPool>, tick = ADULT_TICK): Promise<void> {
+  await pool.query(
+    `INSERT INTO world_clock (id, tick, phase) VALUES (1, $1, 'day') ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick`,
+    [tick],
+  );
+}
+
 async function insertEpisode(pool: ReturnType<typeof getTestPool>, creatureId: string, type: string, significance = 0.9, createdAt?: string) {
   await pool.query(
     `INSERT INTO episodes (creature_id, tick, type, participants, significance, created_at, decayed_at)
@@ -22,6 +32,7 @@ describe("queue.ts: отбор кандидатов (7.3) — дебаунс, с
 
   it("findDueEventCandidates: существо с недавней событийной рефлексией НЕ считается due (дебаунс 4ч)", async () => {
     const pool = getTestPool();
+    await ensureAdultWorldTick(pool);
     const creatureId = await insertCreature(pool, { species: "penguin" });
     await insertEpisode(pool, creatureId, "friend_died");
     await insertDummyEventReflection(pool, creatureId);
@@ -32,6 +43,7 @@ describe("queue.ts: отбор кандидатов (7.3) — дебаунс, с
 
   it("findDueEventCandidates: без недавней рефлексии и с триггерным эпизодом — due", async () => {
     const pool = getTestPool();
+    await ensureAdultWorldTick(pool);
     const creatureId = await insertCreature(pool, { species: "penguin" });
     await insertEpisode(pool, creatureId, "friend_died");
 
@@ -39,8 +51,19 @@ describe("queue.ts: отбор кандидатов (7.3) — дебаунс, с
     expect(due).toContain(creatureId);
   });
 
+  it("findDueEventCandidates: детёныш с триггерным эпизодом НЕ due (7.4 — только фоновая)", async () => {
+    const pool = getTestPool();
+    await ensureAdultWorldTick(pool, 100); // ageWeeks ≈ 0 → juvenile
+    const creatureId = await insertCreature(pool, { species: "penguin" });
+    await insertEpisode(pool, creatureId, "friend_died");
+
+    const due = await findDueEventCandidates(pool);
+    expect(due).not.toContain(creatureId);
+  });
+
   it("findDueEventCandidates: НЕ триггерный тип эпизода (woken_by_alarm) сам по себе не делает существо due", async () => {
     const pool = getTestPool();
+    await ensureAdultWorldTick(pool);
     const creatureId = await insertCreature(pool, { species: "penguin" });
     await insertEpisode(pool, creatureId, "woken_by_alarm", 0.2);
 
@@ -57,6 +80,24 @@ describe("queue.ts: отбор кандидатов (7.3) — дебаунс, с
     const due = await findDueBackgroundCandidates(pool);
     expect(due).toContain(asleep);
     expect(due).not.toContain(awake);
+  });
+
+  it("selectCandidates: пустой фон (нет unconsumed) — LLM не ставится, interval bookkeeping через discarded", async () => {
+    const pool = getTestPool();
+    await ensureAdultWorldTick(pool);
+    const creatureId = await insertCreature(pool, { species: "penguin" });
+    await pool.query(`UPDATE creatures SET is_asleep = TRUE WHERE id = $1`, [creatureId]);
+
+    const selected = await selectCandidates(pool);
+    expect(selected.every((s) => s.candidate.creatureId !== creatureId)).toBe(true);
+
+    const row = await pool.query(`SELECT status, kind FROM reflections WHERE creature_id = $1 ORDER BY created_at DESC LIMIT 1`, [creatureId]);
+    expect(row.rows[0].kind).toBe("background");
+    expect(row.rows[0].status).toBe("discarded");
+
+    // Повторный select не крутит снова (interval bookkeeping).
+    const dueAgain = await findDueBackgroundCandidates(pool);
+    expect(dueAgain).not.toContain(creatureId);
   });
 
   it("слияние событий окна: fetchUnconsumedEpisodes отдаёт ВСЕ непоглощённые эпизоды существа, не только триггерный", async () => {
@@ -83,6 +124,7 @@ describe("queue.ts: отбор кандидатов (7.3) — дебаунс, с
 
   it("selectCandidates: глобальный часовой лимит (30/час) режет число событийных вызовов, отдавая приоритет дольше всех ждущим", async () => {
     const pool = getTestPool();
+    await ensureAdultWorldTick(pool);
 
     // Другие тесты этого файла уже могли вставить свои строки reflections (общий
     // эфемерный Postgres, без сброса между it()) — считаем ТЕКУЩИЙ расход и

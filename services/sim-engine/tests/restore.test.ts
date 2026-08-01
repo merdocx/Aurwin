@@ -50,6 +50,21 @@ describe("persistence: восстановление снапшота из Postgr
     expect(restored!.aversions).toContainEqual({ subjectId: idA, objectId: idB, strength: 0.4 });
   });
 
+  it("loadWorldState восстанавливает fish_density и last_reproduced_at_tick", async () => {
+    const pool = getTestPool();
+    const id = randomUUID();
+    const creature = makeTestCreature({ id, species: "penguin" });
+    creature.lastReproducedAtTick = 3333;
+
+    await upsertCreatures(pool, [creature], "full");
+    await updateWorldClock(pool, 5000, "day", { north_bay: 0.55, south_shallows: 0.88 });
+
+    const restored = await loadWorldState(pool);
+    expect(restored!.fishDensity).toEqual({ north_bay: 0.55, south_shallows: 0.88 });
+    const restoredCreature = restored!.creatures.find((c) => c.id === id)!;
+    expect(restoredCreature.lastReproducedAtTick).toBe(3333);
+  });
+
   it("умершие (died_at_tick заполнен) не попадают в восстановленную популяцию", async () => {
     const pool = getTestPool();
     const aliveId = randomUUID();

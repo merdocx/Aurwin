@@ -5,6 +5,8 @@
 CLAUDE.md, «Незыблемые правила», п.3-4, и docs/AURWIN_TZ.md, раздел 9 и
 А.9 (правило работы с таблицей констант).
 
+2026-07-31 — Horizon 2: добавлена `reproduction.culture_inherit` (habits 0.4 + шум ±0.1, weights 0.15 от defaults к среднему родителей, skills 0.1 среднего); мягкая преемственность без замены личного обучения.
+
 ## 2026-07-31 — фаза 4 «Жизнь», первая балансировка перед `npm run simulate -- --days 30 --fast`
 
 Первый же тестовый прогон (`--days 1 --seed 42`) обрушил genesis-популяцию
@@ -163,3 +165,188 @@ base_hunt_success_probability` (летальность охоты) — оба я
 (сравнимо с предыдущим сравнительным прогоном) и полный гейт
 `--days 30 --fast --seed 1` (отчёт в `ops/reports/phase-4.md`).
 Мониторинг live: Prometheus `aurwin_population` / алёрты популяции.
+
+## 2026-07-31 — сброс live-мира + цель среднего ≤~50
+
+**Контекст.** Live: ~201 пингвин / ~28 касаток (далеко выше 30–80 / 3–8
+из 6.2). Причины: двойной genesis при приёмке + рождаемость >> смертности
+(голод/старость почти не срабатывали). По явной команде оператора мир
+сброшен «с нуля» (TRUNCATE существ и связанной истории + world_clock),
+затем штатный genesis 40/4.
+
+**Цель баланса:** среднее одновременно ≤~50 существ
+(~42–45 пингвинов + 4–6 касаток) за счёт ёмкости среды, без жёсткого
+потолка и без правки `population.genesis` (п.9).
+
+Изменения в `config/constants.yaml`:
+
+1. `world.fish_respawn_per_tick`:
+   `north_bay 0.020 -> 0.012` (−40%),
+   `south_shallows 0.007 -> 0.004` (−43%).
+2. `world.base_hunt_success_probability`: `0.25 -> 0.28`.
+
+Мониторинг: `GET /api/world/stats`, Prometheus `aurwin_population`,
+алёрты `Aurwin*PopulationOutOfRange`. При уходе устойчиво выше ~80/8 —
+ещё раз вниз fish или вверх hunt; при обвале ниже ~20/2 — откат шага.
+
+## 2026-07-31 — soft-separation фигурок (UX карты)
+
+Добавлены константы `movement.separation` (не из А.9 дословно — инженерная
+величина для визуального расталкивания на карте, см. `ops/DEVIATIONS.md`):
+
+- `penguin_radius_units: 8`
+- `orca_radius_units: 16`
+- `iterations: 2`
+
+Пара охотник↔жертва при `hunt`/`stealth_approach`/`coordinate_hunt` не
+разводится. Баланс популяции/охоты этими числами не целим — только
+избежание стака спрайтов. Проверка: visual QA на aurwin.ru после деплоя
+sim-engine + frontend.
+
+## 2026-07-31 — P3 ecosystem: реинтродукция + персистентность + offline-валидация
+
+**Реализовано (код, не смена констант):**
+
+1. **Реинтродукция (7.4)** — `sim/reintroduction.ts`, вызов в конце каждого
+   тика после смертей. При `count(species) <= population.reintroduction.reintroduce_at`
+   (0) подселяется когорта `population.genesis` (40/4). Кулдаун между
+   повторными реинтродукциями одного вида =
+   `reproduction.cooldown_inner_days` внутренних суток. Событие мира
+   `reintroduction`; stderr sim-engine + обязательная запись здесь при live-срабатывании.
+
+2. **Персистентность рыбы** — `world_clock.fish_density` (JSONB, migration 015),
+   snapshot/restore в `FishField`, запись каждый тик в `updateWorldClock`.
+
+3. **Персистентность кулдауна размножения** — `creatures.last_reproduced_at_tick`
+   (migration 015), restore + полный upsert.
+
+**Offline-прогон (30-day pending — полный прогон ~40 мин CPU на 3 суток):**
+
+`npm run simulate -- --days 3 --fast --seed 42` (~2382 с реального времени,
+54 тиков/с):
+
+| Метрика | Значение |
+|---------|----------|
+| Пингвины | 40 → **100** (мин 40) |
+| Касатки | 4 → **4** (мин 4; 1× реинтродукция на тике 79920 — все 4 умерли от голода, когорта восстановлена) |
+| Рождений | 77 пингвинов, 0 касаток |
+| Смертей | пингвины: age 8, starvation 9; касатки: starvation 4 (+ реинтродукция) |
+| Тиков вне alert-порогов | **0 / 129600 (0.0%)** |
+| Вымирание без восстановления | нет |
+| Гейты фазы 4 | все OK |
+
+**Вывод по траектории (3 суток, не 30):** популяция **растёт** (40→100 за 3
+реальных суток симуляции), но остаётся внутри `alert_thresholds` (≤120/12).
+Целевое среднее ≤~50 **не достигнуто** — тренд вверх. **30-day прогон pending**
+(ожидаем ~4 ч CPU при текущей скорости offline-tick).
+
+**Замечание:** после правок land-mask (P2/P3 карта) пространственная ёмкость
+зон могла сдвинуться — offline-цифры выше отражают текущую геометрию; при
+деплое land-mask на live может потребоваться повторная подстройка
+`fish_respawn_per_tick` / `base_hunt_success_probability` (см. записи выше).
+
+**Live БД не трогали** — только in-memory simulate + unit/integration тесты
+(`npm test` зелёный, 365 тестов).
+
+## 2026-07-31 — steering / activity (фаза 7+)
+
+Добавлены `movement.steering.*` и `movement.separation.max_nudge_units` —
+начальные значения подобраны для плавных траекторий без «телепортов» при
+смене действия (гистерезис 0.08, max_turn 0.7 рад/тик, wander persistence 6
+тиков). **Не меняли** `water_speed` / `base_hunt_success_probability` — только
+качество движения и наблюдаемость (`activity` в WS). Проверка: `tsc` sim-engine
++ api-gateway, `npm test`.
+
+## 2026-07-31 — страх / flee (читаемость драмы)
+
+Наблюдение (live): пингвины у hunting-касаток держали `activity=swim`,
+`perceivedThreat` → 0 из-за decay, flee проигрывал approach/голоду.
+
+Новые константы `hunting.prey_threat.*`:
+- `baseline` / `visible_floor`: 0.45
+- `hunt_bump`: 0.9
+- `flee_proximity_weight`: 1.0
+- `social_suppress`: 0.75
+
+Логика (не подгонка летальности): threat floor пока orca видна; bump на
+hunt_attempt; decay только вне радиуса; proximity в U(flee); arrival_slow
+не для flee; emotion see_orca / hunt_survived с отрицательным valence;
+`activity: flee`. `base_hunt_success_probability` не трогали.
+
+Проверка: `tsc` sim + frontend; деплой + live activity/flee рядом с orca.
+
+## 2026-07-31 — Horizon 0 motion
+
+`movement.steering`: wander 16 тиков с jitter 0.12, action commit 5 тиков и hysteresis 0.18; separation позиционно смягчён до ×0.5 с переносом nudge в heading — правка наблюдаемости движения, не скоростей/летальности.
+
+## 2026-07-31 — Living world H0–H3 + balance
+
+### Что сделано (не летальность)
+- Sleep XOR move: idle не выбирается; `action_commit_ticks=5`
+- Wander-патруль + клиент velocity-damp / facing deadzone
+- Warm-start trust / perceived / episodes
+- Card: intentions + habits; genesis/birth starter narrative_facts
+- culture_inherit; intentions prefer/avoid_zone, hunt_with; mate/offense/breakup
+- fish decor ← fish_density; UI reintroduction «Вернулись в мир»
+
+### Offline balance probe
+1. `simulate --days 7 --fast --seed 42` прерван на **45%** (~3.15 сут):
+   пингвины **40→132**, касатки **4→8** — уже выше alert max 120/12.
+2. После первой урезки fish 0.010/0.0035 + hunt 0.30:
+   `simulate --days 3 --fast --seed 42` **завершён** (1520с, 85 тик/с):
+   - пингвины **40→141** (min 40), касатки **4→7**
+   - рождения 148/3; смерти пингвинов predation 43 + age 4
+   - тиков вне alert: **12741 / 129600 (9.8%)**
+   - вымирания нет; sleep night max 0.688 OK
+   - гейт дисперсии черт: FAIL (sociability/caution/expressiveness <0.5)
+
+### Подстройка ёмкости (п.9 — не genesis counts)
+- fish: north_bay 0.012→0.010→**0.007**; south 0.004→0.0035→**0.0025**
+- `base_hunt_success_probability`: 0.28→0.30→**0.33** (не 0.35 — риск wipe)
+
+Повторный 3d/7d после второй урезки — следующий прогон. Live БД не сбрасывали.
+
+## 2026-07-31 — World scale ÷2
+
+Утверждено: карта/N/зрение/скорости/social-radii ÷2 для нагрузки.
+
+| Параметр | Было | Стало |
+|----------|------|-------|
+| map | 2000×1200 | 1000×600 |
+| FE map | 3200×1920 | 1600×960 |
+| genesis | 40/4 | 20/2 |
+| alert max | 120/12 | 60/6 |
+| vision penguin | 120/70 | 60/35 |
+| vision orca | 200/150 | 100/75 |
+| water speed | 14/22 | 7/11 |
+| bond/guard/contact | 40/60/25 | 20/30/12 |
+
+Live: требуется genesis reset (старые координаты вне карты).
+
+## 2026-08-01 — скорости/тело/социальный граф (визуал + охота)
+
+Реальные ориентиры: Adélie cruise ~2 m/s / burst ~4; orca cruise ~2× пингвина,
+охотничий рывок заметно быстрее.
+
+| Параметр | Было (после ÷2) | Стало |
+|----------|-----------------|-------|
+| water_speed penguin/orca | 7 / 11 | **8 / 16** (база ~2×) |
+| action_speed hunt / coord / flee / stealth | — | **1.35 / 1.4 / 1.2 / 0.55** |
+| body_radius penguin/orca | — | **10 / 28** (клиренс касатки от льда) |
+
+Симулятор: `resolveMovement` × action multipliers; `clearBodyFromLand` для касаток.
+FE: scaleX-зеркало отдельно от swim-keyframes (раньше animation сбрасывал flip).
+API/UI: рёбра графа friend / mate / kin разными цветами.
+
+## 2026-08-01 — нос-якорь + касание = съел (удача до контакта)
+
+| Параметр | Было | Стало |
+|----------|------|-------|
+| contact_radius | 12 | **38** (= body 10+28) |
+| P(kill\|contact) | ~0.33×моды | **1.0** (always) |
+| separation radii | 4 / 8 | **10 / 28** |
+| separation nudge | max 3 ×0.5 | **max 12 ×0.85**, 3 iter |
+| hunting.pre_contact | — | band +16, defense nudge 10 |
+
+Удача А.10 перенесена: notice→flee commit; group/guard = срыв сближения
+(coordinate отменяет). FE: мир-точка = нос, `rotate(facing+180)` в воде.

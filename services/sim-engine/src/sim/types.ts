@@ -83,6 +83,11 @@ export interface IntentionEffect {
   approach_bonus?: { creature: string; value: number };
   avoid_creature?: { creature: string; value: number };
   seek_mate?: boolean;
+  /** Предпочтительная/нежелательная зона, валидируется reflection-worker. */
+  prefer_zone?: ZoneName;
+  avoid_zone?: ZoneName;
+  /** UUID цели совместной охоты из намерения рефлексии. */
+  hunt_with?: string;
 }
 
 export interface Intention {
@@ -176,6 +181,17 @@ export interface Vector2 {
   y: number;
 }
 
+export type Activity =
+  | "sleep"
+  | "walk"
+  | "swim"
+  | "hunt"
+  | "forage"
+  | "flee"
+  | "transit_in"
+  | "transit_out"
+  | "idle";
+
 /**
  * Существо (текущее состояние) — in-memory аналог таблицы `creatures`
  * (А.2). Персистентность в БД — вне рамок фазы 4 (см. ops/DEVIATIONS.md):
@@ -224,6 +240,19 @@ export interface Creature {
 
   /** Действие, выбранное в ПРЕДЫДУЩЕМ тике — используется для интерполяции движения и метрик. */
   lastAction?: string;
+
+  /** Текущий курс движения (рад), RAM-only — для плавного рулевого управления. */
+  heading?: number;
+  /** Оставшиеся тики удержания wander-курса (RAM-only). */
+  wanderHeadingTicks?: number;
+  /** Тики «закрепления» текущего действия (RAM-only). */
+  actionCommitTicks?: number;
+  /** Среда на прошлом тике — для transit_in/out (RAM-only). */
+  lastMedium?: "ice" | "water";
+  /** Тик, до которого держим transit_* (не включая); RAM-only. */
+  transitUntilTick?: number;
+  /** Наблюдаемый режим активности (персистится в light upsert). */
+  activity?: Activity;
 
   episodes: Episode[];
   /** observer(this) -> subject_id -> perceived state (7.8.1). */

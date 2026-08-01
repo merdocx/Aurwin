@@ -1,24 +1,58 @@
-# Caddy — единственный сервис, публично слушающий 80/443 (CLAUDE.md/А.7:
-# Postgres/внутренние метрики наружу не торчат — см. docker-compose.yml,
-# у остальных сервисов порты либо не публикуются, либо только на 127.0.0.1).
-# TLS-сертификат Let's Encrypt выпускается и обновляется автоматически самим
-# Caddy (ACME HTTP-01 на порту 80) — отдельного certbot/cron не требуется.
+# Caddy — единственный сервис, публично слушающий 80/443.
+# TLS Let's Encrypt выпускается и обновляется автоматически (ACME HTTP-01).
 #
-# Маршрутизация — одна публичная точка входа на два внутренних сервиса
-# (А.1: api-gateway — WebSocket + REST для карточек/соцкарты; frontend —
-# рендер). apps/frontend собирается с VITE_API_URL=https://aurwin.ru и
-# VITE_WS_URL=wss://aurwin.ru/ws (см. docker-compose.yml) — поэтому все
-# запросы идут на ОДИН домен, и прокси обязан развести их по префиксу.
+# Маршрутизация: /ws и /api/* → api-gateway; остальное → frontend (статика).
+
+# www → apex
+www.aurwin.ru {
+	redir https://aurwin.ru{uri} permanent
+}
+
 aurwin.ru {
-	handle /ws* {
-		reverse_proxy api-gateway:3000
+	encode gzip
+
+	# Access-лог в stdout JSON — ротация через docker json-file (max-size/max-file).
+	log {
+		output stdout
+		format json
+	}
+
+	# Базовые security headers (P2 hardening).
+	header {
+		Content-Language "ru"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Content-Security-Policy "default-src 'self'; connect-src 'self' wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+	}
+
+	# Caddy сам выставляет X-Forwarded-For; api-gateway читает его только
+	# от peer из docker-сети (см. services/api-gateway/src/ip.ts), иначе
+	# лимит 3 WS/IP схлопывается в один общий бакет на весь сайт.
+	handle /ws {
+		reverse_proxy api-gateway:3000 {
+			header_up X-Real-IP {remote_host}
+		}
+	}
+
+	handle /ws/* {
+		reverse_proxy api-gateway:3000 {
+			header_up X-Real-IP {remote_host}
+		}
 	}
 
 	handle /api/* {
-		reverse_proxy api-gateway:3000
+		reverse_proxy api-gateway:3000 {
+			header_up X-Real-IP {remote_host}
+		}
 	}
 
 	handle {
-		reverse_proxy frontend:5173
+		reverse_proxy frontend:5173 {
+			# serve/vite не должны видеть Host вида frontend:5173
+			header_up Host {host}
+			header_up X-Forwarded-Proto {scheme}
+		}
 	}
 }

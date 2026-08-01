@@ -24,6 +24,25 @@ function timelineDto(events: WorldEventRow[]) {
 
 const CREATURE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function observerIntentions(intentions: unknown): Array<{ text: string; effect?: Record<string, unknown> }> {
+  if (!Array.isArray(intentions)) return [];
+  return intentions.flatMap((intention) => {
+    if (!intention || typeof intention !== "object") return [];
+    const { text, effect } = intention as Record<string, unknown>;
+    if (typeof text !== "string") return [];
+    return effect && typeof effect === "object" && !Array.isArray(effect) ? [{ text, effect: effect as Record<string, unknown> }] : [{ text }];
+  });
+}
+
+function observerHabits(habits: unknown): Record<string, number> {
+  if (!habits || typeof habits !== "object" || Array.isArray(habits)) return {};
+  const publicHabits: Record<string, number> = {};
+  for (const [zone, score] of Object.entries(habits as Record<string, unknown>)) {
+    if (typeof score === "number") publicHabits[zone] = score;
+  }
+  return publicHabits;
+}
+
 export async function handleCreatureCard(res: ServerResponse, pool: Pool, id: string): Promise<void> {
   if (!CREATURE_ID_RE.test(id)) {
     sendJson(res, 400, { error: "некорректный id" });
@@ -56,6 +75,8 @@ export async function handleCreatureCard(res: ServerResponse, pool: Pool, id: st
     is_asleep: card.is_asleep,
     leading_skills: leadingSkills,
     narrative_facts: card.narrative_facts,
+    intentions: observerIntentions(card.intentions),
+    habits: observerHabits(card.habits),
     timeline: timelineDto(timeline),
   });
 }

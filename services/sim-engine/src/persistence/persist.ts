@@ -7,15 +7,23 @@ import type { AversionRecord, BondRecord, Creature, DecisionLogEntry, Episode, S
  * Две частоты записи creatures, обе используют ОДИН и тот же полный набор
  * колонок для VALUES (значения и так уже в памяти — дёшево сериализовать
  * JSONB целиком), но РАЗНЫЙ набор колонок в ON CONFLICT DO UPDATE:
- *   - "light" (каждый тик, ~2 сек): только позиция/зона/эмоция/сон — это
- *     единственные поля, нужные наблюдателю между полными снапшотами (А.6:
- *     "delta каждые 1-2 сек").
+ *   - "light" (каждый тик, ~2 сек): только позиция/зона/эмоция/сон/activity —
+ *     UPDATE через VALUES без INSERT (новорождённые — full snapshot/genesis).
  *   - "full" (раз в time.snapshot_interval_ticks, ~30 тиков/1 мин, А.9
  *     "Снапшот в БД"): все столбцы, включая тяжёлые JSONB (narrative,
  *     weights, habits, intentions) — устойчивость к рестарту (6.1).
  * Так INSERT новой строки (genesis/новорождённый) всегда полноценен вне
  * зависимости от режима, а частая запись остаётся дешёвой.
  */
+
+/** PostgreSQL `real` (float4): denormal/underflow в тексте падает с 22003. */
+function toPgReal(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  const abs = Math.abs(n);
+  if (abs !== 0 && abs < 1e-37) return 0;
+  if (abs > 3.4e38) return Math.sign(n) * 3.4e38;
+  return n;
+}
 
 const FULL_COLUMNS = [
   "id",
@@ -38,24 +46,24 @@ const FULL_COLUMNS = [
   "skills",
   "chronotype",
   "is_asleep",
+  "activity",
   "authority",
   "habits",
   "weights",
   "weights_birth",
   "last_reflection_at",
+  "last_reproduced_at_tick",
 ] as const;
 
-const LIGHT_UPDATE_COLUMNS = ["pos_x", "pos_y", "zone", "emotion", "is_asleep"] as const;
+const LIGHT_UPSERT_COLUMNS = ["id", "pos_x", "pos_y", "zone", "emotion", "is_asleep", "activity"] as const;
 
 /**
  * Колонки, которые reflection-worker (фаза 6) применяет НАПРЯМУЮ в Postgres
  * (services/reflection-worker/src/apply.ts) — traits/weights/narrative/
- * narrative_facts/intentions/last_reflection_at. sim-engine держит СВОЮ
- * in-memory копию этих полей (Creature.traits и т.д.), которая обновляется
- * реальными значениями только при restore (persistence/restore.ts) — то
- * есть при рестарте процесса, не "вживую" в том же запуске (см.
- * ops/DEVIATIONS.md, фаза 6: доработка живой синхронизации без рестарта —
- * рекомендованный follow-up, не входит в эту фазу).
+ * narrative_facts/intentions/last_reflection_at. sim-engine держит in-memory
+ * копию; reflection-worker пишет в Postgres, sim-engine перечитывает через
+ * reloadReflectionFields (persistence/reloadReflection.ts) раз в
+ * snapshot_interval_ticks. Полный upsert не затирает эти колонки (см. ниже).
  *
  * Если бы полный периодический снапшот (раз в snapshot_interval_ticks)
  * продолжал перезаписывать ЭТИ колонки из своей (потенциально устаревшей)
@@ -89,18 +97,55 @@ function creatureRowValues(c: Creature): unknown[] {
     JSON.stringify(c.skills),
     c.chronotype,
     c.isAsleep,
+    c.activity ?? "idle",
     c.authority,
     JSON.stringify(c.habits),
     JSON.stringify(c.weights),
     JSON.stringify(c.weightsBirth),
     c.lastReflectionAt,
+    c.lastReproducedAtTick ?? null,
   ];
 }
 
 /** Только для ЖИВЫХ существ (сравни с applyDeaths ниже) — вызывающая сторона гарантирует это (index.ts). */
 export async function upsertCreatures(pool: Pool, creatures: Creature[], mode: "light" | "full"): Promise<void> {
   if (creatures.length === 0) return;
-  const updateCols = mode === "full" ? FULL_COLUMNS.filter((c) => c !== "id" && !REFLECTION_OWNED_COLUMNS.has(c)) : LIGHT_UPDATE_COLUMNS;
+
+  if (mode === "light") {
+    const values: unknown[] = [];
+    const rowPlaceholders: string[] = [];
+    for (const creature of creatures) {
+      const row = [
+        creature.id,
+        creature.pos.x,
+        creature.pos.y,
+        creature.zone,
+        JSON.stringify(creature.emotion),
+        creature.isAsleep,
+        creature.activity ?? "idle",
+      ];
+      const base = values.length;
+      rowPlaceholders.push(
+        `($${base + 1}::uuid, $${base + 2}::real, $${base + 3}::real, $${base + 4}::text, $${base + 5}::jsonb, $${base + 6}::boolean, $${base + 7}::text)`,
+      );
+      values.push(...row);
+    }
+    await pool.query(
+      `UPDATE creatures AS c SET
+        pos_x = v.pos_x,
+        pos_y = v.pos_y,
+        zone = v.zone,
+        emotion = v.emotion,
+        is_asleep = v.is_asleep,
+        activity = v.activity
+      FROM (VALUES ${rowPlaceholders.join(", ")}) AS v(${LIGHT_UPSERT_COLUMNS.join(", ")})
+      WHERE c.id = v.id`,
+      values,
+    );
+    return;
+  }
+
+  const updateCols = FULL_COLUMNS.filter((c) => c !== "id" && !REFLECTION_OWNED_COLUMNS.has(c));
   const setClause = updateCols.map((c) => `${c} = EXCLUDED.${c}`).join(", ");
 
   const values: unknown[] = [];
@@ -115,6 +160,34 @@ export async function upsertCreatures(pool: Pool, creatures: Creature[], mode: "
   await pool.query(
     `INSERT INTO creatures (${FULL_COLUMNS.join(", ")}) VALUES ${rowPlaceholders.join(", ")} ` +
       `ON CONFLICT (id) DO UPDATE SET ${setClause}`,
+    values,
+  );
+  // Новорождённые попадают в БД на full-снапшоте — birth-строка trait_history
+  // идемпотентна (NOT EXISTS), чтобы повторные full-upsert не плодили дубли.
+  await ensureTraitHistoryBirths(pool, creatures);
+}
+
+/**
+ * Запись стартовых черт в trait_history (source=birth, А.2). Идемпотентно:
+ * повторный вызов для той же особи не создаёт вторую birth-строку.
+ */
+export async function ensureTraitHistoryBirths(pool: Pool, creatures: Creature[]): Promise<void> {
+  if (creatures.length === 0) return;
+  const values: unknown[] = [];
+  const rowPlaceholders: string[] = [];
+  for (const creature of creatures) {
+    const base = values.length;
+    rowPlaceholders.push(`($${base + 1}::uuid, $${base + 2}::bigint, $${base + 3}::jsonb)`);
+    values.push(creature.id, creature.bornAtTick, JSON.stringify(creature.traitsBirth));
+  }
+  await pool.query(
+    `INSERT INTO trait_history (creature_id, tick, traits, source)
+     SELECT v.creature_id, v.tick, v.traits, 'birth'
+     FROM (VALUES ${rowPlaceholders.join(", ")}) AS v(creature_id, tick, traits)
+     WHERE NOT EXISTS (
+       SELECT 1 FROM trait_history th
+       WHERE th.creature_id = v.creature_id AND th.source = 'birth'
+     )`,
     values,
   );
 }
@@ -300,6 +373,106 @@ export async function syncAversions(pool: Pool, aversions: AversionRecord[]): Pr
 }
 
 /**
+ * Полная синхронизация краткоживущих социально-сигнальных состояний (А.2).
+ * Как и bonds/aversions, эти таблицы отражают только актуальный RAM-снимок,
+ * поэтому на полном снапшоте заменяются целиком в транзакции.
+ */
+export async function syncPerceivedStates(pool: Pool, creatures: Creature[]): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM perceived_states");
+
+    const values: unknown[] = [];
+    const rowPlaceholders: string[] = [];
+    for (const observer of creatures) {
+      for (const [subjectId, state] of observer.perceivedStates) {
+        const base = values.length;
+        rowPlaceholders.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`);
+        values.push(
+          observer.id,
+          subjectId,
+          toPgReal(state.perceivedVigor),
+          toPgReal(state.perceivedThreat),
+          Number.isFinite(state.lastSignalTick) ? state.lastSignalTick : null,
+        );
+      }
+    }
+    if (values.length > 0) {
+      await client.query(
+        `INSERT INTO perceived_states (observer_id, subject_id, perceived_vigor, perceived_threat, last_signal_tick)
+         VALUES ${rowPlaceholders.join(", ")}`,
+        values,
+      );
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function syncPerceivedZoneThreat(pool: Pool, creatures: Creature[]): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM perceived_zone_threat");
+
+    const values: unknown[] = [];
+    const rowPlaceholders: string[] = [];
+    for (const observer of creatures) {
+      for (const [zone, threat] of observer.perceivedZoneThreat) {
+        const base = values.length;
+        rowPlaceholders.push(`($${base + 1}, $${base + 2}, $${base + 3})`);
+        values.push(observer.id, zone, toPgReal(threat));
+      }
+    }
+    if (values.length > 0) {
+      await client.query(`INSERT INTO perceived_zone_threat (observer_id, zone, threat) VALUES ${rowPlaceholders.join(", ")}`, values);
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function syncSignalTrust(pool: Pool, creatures: Creature[]): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM signal_trust");
+
+    const values: unknown[] = [];
+    const rowPlaceholders: string[] = [];
+    for (const observer of creatures) {
+      for (const [signalerId, entry] of observer.trust) {
+        const base = values.length;
+        rowPlaceholders.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`);
+        values.push(observer.id, signalerId, entry.trust, entry.confirmations, entry.disconfirmations);
+      }
+    }
+    if (values.length > 0) {
+      await client.query(
+        `INSERT INTO signal_trust (observer_id, signaler_id, trust, confirmations, disconfirmations)
+         VALUES ${rowPlaceholders.join(", ")}`,
+        values,
+      );
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/**
  * Атомарная персистентность самого первого состояния мира (genesis, 6.1):
  * INSERT genesis-популяции и world_clock в ОДНОЙ транзакции.
  *
@@ -316,7 +489,13 @@ export async function syncAversions(pool: Pool, aversions: AversionRecord[]): Pr
  * частичного состояния "особи без world_clock" при использовании этой
  * функции возникнуть не может.
  */
-export async function persistGenesis(pool: Pool, creatures: Creature[], tick: number, phase: "day" | "night"): Promise<void> {
+export async function persistGenesis(
+  pool: Pool,
+  creatures: Creature[],
+  tick: number,
+  phase: "day" | "night",
+  fishDensity?: Record<string, number>,
+): Promise<void> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -333,11 +512,29 @@ export async function persistGenesis(pool: Pool, creatures: Creature[], tick: nu
         `INSERT INTO creatures (${FULL_COLUMNS.join(", ")}) VALUES ${rowPlaceholders.join(", ")} ON CONFLICT (id) DO NOTHING`,
         values,
       );
+      // Birth trait_history в той же транзакции, что и genesis-популяция.
+      const thValues: unknown[] = [];
+      const thPlaceholders: string[] = [];
+      for (const creature of creatures) {
+        const base = thValues.length;
+        thPlaceholders.push(`($${base + 1}::uuid, $${base + 2}::bigint, $${base + 3}::jsonb)`);
+        thValues.push(creature.id, creature.bornAtTick, JSON.stringify(creature.traitsBirth));
+      }
+      await client.query(
+        `INSERT INTO trait_history (creature_id, tick, traits, source)
+         SELECT v.creature_id, v.tick, v.traits, 'birth'
+         FROM (VALUES ${thPlaceholders.join(", ")}) AS v(creature_id, tick, traits)
+         WHERE NOT EXISTS (
+           SELECT 1 FROM trait_history th
+           WHERE th.creature_id = v.creature_id AND th.source = 'birth'
+         )`,
+        thValues,
+      );
     }
     await client.query(
-      `INSERT INTO world_clock (id, tick, phase, updated_at) VALUES (1, $1, $2, now())
-       ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick, phase = EXCLUDED.phase, updated_at = now()`,
-      [tick, phase],
+      `INSERT INTO world_clock (id, tick, phase, fish_density, updated_at) VALUES (1, $1, $2, $3, now())
+       ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick, phase = EXCLUDED.phase, fish_density = EXCLUDED.fish_density, updated_at = now()`,
+      [tick, phase, fishDensity ? JSON.stringify(fishDensity) : null],
     );
     await client.query("COMMIT");
   } catch (err) {
@@ -348,11 +545,16 @@ export async function persistGenesis(pool: Pool, creatures: Creature[], tick: nu
   }
 }
 
-export async function updateWorldClock(pool: Pool, tick: number, phase: "day" | "night"): Promise<void> {
+export async function updateWorldClock(
+  pool: Pool,
+  tick: number,
+  phase: "day" | "night",
+  fishDensity?: Record<string, number>,
+): Promise<void> {
   await pool.query(
-    `INSERT INTO world_clock (id, tick, phase, updated_at) VALUES (1, $1, $2, now())
-     ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick, phase = EXCLUDED.phase, updated_at = now()`,
-    [tick, phase],
+    `INSERT INTO world_clock (id, tick, phase, fish_density, updated_at) VALUES (1, $1, $2, $3, now())
+     ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick, phase = EXCLUDED.phase, fish_density = EXCLUDED.fish_density, updated_at = now()`,
+    [tick, phase, fishDensity ? JSON.stringify(fishDensity) : null],
   );
 }
 

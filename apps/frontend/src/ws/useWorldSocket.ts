@@ -7,14 +7,28 @@ export type ConnectionStatus = "connecting" | "open" | "closed" | "rejected";
 function resolveWsUrl(): string {
   const explicit = import.meta.env.VITE_WS_URL as string | undefined;
   if (explicit) return explicit;
-  // По умолчанию — api-gateway на том же хосте, порт 3000 (docker-compose:
-  // 127.0.0.1:3000). VITE_WS_URL переопределяет для иных деплоев.
+  // За reverse-прокси (Caddy) WebSocket на том же origin: /ws.
+  // Прямой :3000 — только для локальной разработки без прокси.
+  if (window.location.port === "5173" || window.location.hostname === "localhost") {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${window.location.hostname}:3000/ws`;
+  }
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.hostname}:3000/ws`;
+  return `${protocol}//${window.location.host}/ws`;
 }
 
 /** Троттлинг отправки viewport — навигация может слаться на каждый кадр пана/зума, серверу это не нужно чаще пары раз в секунду. */
 const VIEWPORT_SEND_INTERVAL_MS = 400;
+const RECONNECT_BASE_MS = 2_000;
+const RECONNECT_MAX_MS = 30_000;
+const RECONNECT_REJECTED_MS = 15_000;
+
+function reconnectDelayMs(attempt: number, rejected: boolean): number {
+  if (rejected) return RECONNECT_REJECTED_MS;
+  const exp = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** attempt);
+  const jitter = Math.random() * exp * 0.1;
+  return exp + jitter;
+}
 
 export function useWorldSocket() {
   const storeRef = useRef(new WorldStore());
@@ -30,6 +44,18 @@ export function useWorldSocket() {
   useEffect(() => {
     let cancelled = false;
     let ws: WebSocket | undefined;
+    let reconnectTimer: number | null = null;
+    let rejected = false;
+    let reconnectAttempt = 0;
+
+    function scheduleReconnect(delayMs: number): void {
+      if (cancelled) return;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, delayMs);
+    }
 
     function connect(): void {
       if (cancelled) return;
@@ -38,12 +64,19 @@ export function useWorldSocket() {
       wsRef.current = socket;
       setStatus("connecting");
 
-      socket.onopen = () => setStatus("open");
+      socket.onopen = () => {
+        rejected = false;
+        reconnectAttempt = 0;
+        setErrorMessage(null);
+        setStatus("open");
+      };
 
       socket.onmessage = (ev) => {
         try {
           const msg = JSON.parse(ev.data) as ServerMessage;
           if (msg.type === "error") {
+            // Отказ по ёмкости (А.6) — не долбим сервер каждые 2 сек.
+            rejected = true;
             setErrorMessage(msg.message);
             setStatus("rejected");
             return;
@@ -58,10 +91,12 @@ export function useWorldSocket() {
 
       socket.onclose = () => {
         if (cancelled) return;
-        setStatus("closed");
+        setStatus(rejected ? "rejected" : "closed");
         // Мир живёт без наблюдателя (6.1) — переподключение не критично для
         // симуляции, но наблюдателю нужно восстановить поток без перезагрузки страницы.
-        setTimeout(connect, 2000);
+        const delay = reconnectDelayMs(reconnectAttempt, rejected);
+        if (!rejected) reconnectAttempt += 1;
+        scheduleReconnect(delay);
       };
 
       socket.onerror = () => socket.close();
@@ -70,6 +105,7 @@ export function useWorldSocket() {
     connect();
     return () => {
       cancelled = true;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       ws?.close();
     };
   }, []);

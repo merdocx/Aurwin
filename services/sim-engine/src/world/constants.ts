@@ -36,6 +36,7 @@ export interface WorldConstants {
       penguin: { day: number; night: number };
       orca: { day: number; night: number };
     };
+    hearing_radius: { penguin: number; orca: number };
     asleep_perception_multiplier: { penguin: number; orca: number };
     night_fish_availability_multiplier: number;
   };

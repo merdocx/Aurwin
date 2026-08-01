@@ -15,4 +15,5 @@ COPY services/sim-engine ./services/sim-engine
 COPY config ./config
 
 WORKDIR /app/services/sim-engine
-CMD ["npm", "run", "dev"]
+RUN npm run build
+CMD ["npm", "run", "start"]

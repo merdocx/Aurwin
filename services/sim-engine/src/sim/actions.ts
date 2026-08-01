@@ -3,9 +3,16 @@ import { getSimConstants } from "./simConstants.js";
 import { ageStageFor, ageWeeksAt } from "./lifecycle.js";
 import { fatigueSkillMultiplier, fatigueSpeedMultiplier } from "./needs.js";
 import { speedForAgeStage, stepAndReflect, type Medium } from "../world/movement.js";
-import { buildZoneLayout, zoneAt, type ZoneName } from "../world/zones.js";
+import { type ZoneName } from "../world/zones.js";
+import {
+  ecoZoneAtSim,
+  ecoZoneCenterSim,
+  isLandSim,
+  mediumAtSim,
+  pushOrcaOffLand,
+} from "../world/landMask.js";
 import type { FishField } from "../world/fish.js";
-import type { Creature, SignalRecord, SignalType, Vector2 } from "./types.js";
+import type { Activity, Creature, SignalRecord, SignalType, Vector2 } from "./types.js";
 
 const MOVING_ACTIONS_WITH_CREATURE_TARGET = new Set([
   "flee",
@@ -16,14 +23,132 @@ const MOVING_ACTIONS_WITH_CREATURE_TARGET = new Set([
   "coordinate_hunt",
 ]);
 
+const HUNT_ACTIONS = new Set(["hunt", "stealth_approach", "coordinate_hunt"]);
+const FORAGE_ACTIONS = new Set(["goto_food", "eat"]);
+
 function zoneCenter(zone: ZoneName): Vector2 {
-  const z = buildZoneLayout().find((zz) => zz.name === zone);
-  if (!z) throw new Error(`zoneCenter: неизвестная зона ${zone}`);
-  return { x: (z.x0 + z.x1) / 2, y: (z.y0 + z.y1) / 2 };
+  return ecoZoneCenterSim(zone);
 }
 
-function mediumOf(zone: ZoneName): Medium {
-  return buildZoneLayout().find((z) => z.name === zone)!.type;
+function normalizeAngle(rad: number): number {
+  const twoPi = Math.PI * 2;
+  let a = rad % twoPi;
+  if (a < 0) a += twoPi;
+  return a;
+}
+
+/** Кратчайший поворот от `from` к `to` в радианах (-π..π). */
+function shortestAngleDelta(from: number, to: number): number {
+  let d = normalizeAngle(to) - normalizeAngle(from);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
+function turnHeadingToward(current: number, target: number, maxTurn: number): number {
+  const delta = shortestAngleDelta(current, target);
+  if (Math.abs(delta) <= maxTurn) return normalizeAngle(target);
+  return normalizeAngle(current + Math.sign(delta) * maxTurn);
+}
+
+function ensureHeading(creature: Creature, rng: Rng): number {
+  if (creature.heading !== undefined) return creature.heading;
+  const { x, y } = creature.velocity;
+  if (Math.hypot(x, y) > 1e-6) return normalizeAngle(Math.atan2(y, x));
+  return rng.range(0, Math.PI * 2);
+}
+
+function dirFromHeading(heading: number): Vector2 {
+  return { x: Math.cos(heading), y: Math.sin(heading) };
+}
+
+/** Касатка: центр + body_radius целиком в воде — иначе спрайт «лежит» на льду. */
+function clearBodyFromLand(creature: Creature, bounds: { width: number; height: number }): void {
+  if (creature.species !== "orca") return;
+  const r = getSimConstants().movement.body_radius_units.orca;
+  if (r <= 0) return;
+
+  if (isLandSim(creature.pos.x, creature.pos.y)) {
+    creature.pos = pushOrcaOffLand(creature.pos.x, creature.pos.y, bounds);
+    creature.velocity = { x: -creature.velocity.x, y: -creature.velocity.y };
+  }
+
+  let needsPush = isLandSim(creature.pos.x, creature.pos.y, 0);
+  if (!needsPush) {
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      if (isLandSim(creature.pos.x + Math.cos(a) * r, creature.pos.y + Math.sin(a) * r, 0)) {
+        needsPush = true;
+        break;
+      }
+    }
+  }
+  if (!needsPush) return;
+
+  const target = ecoZoneCenterSim("open_water");
+  let x = creature.pos.x;
+  let y = creature.pos.y;
+  for (let step = 0; step < 48; step++) {
+    const dx = target.x - x;
+    const dy = target.y - y;
+    const mag = Math.hypot(dx, dy) || 1;
+    x += (dx / mag) * Math.max(2, r * 0.15);
+    y += (dy / mag) * Math.max(2, r * 0.15);
+    x = Math.min(bounds.width, Math.max(0, x));
+    y = Math.min(bounds.height, Math.max(0, y));
+    let clear = !isLandSim(x, y, 0);
+    if (clear) {
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        if (isLandSim(x + Math.cos(a) * r, y + Math.sin(a) * r, 0)) {
+          clear = false;
+          break;
+        }
+      }
+    }
+    if (clear) {
+      creature.pos = { x, y };
+      return;
+    }
+  }
+  creature.pos = pushOrcaOffLand(x, y, bounds);
+}
+
+type Steering = ReturnType<typeof getSimConstants>["movement"]["steering"];
+
+/** Wander продолжает текущий курс: на границе патруля только слегка отклоняется. */
+function pickWanderDir(creature: Creature, rng: Rng, steering: Steering): Vector2 {
+  let heading = ensureHeading(creature, rng);
+  if ((creature.wanderHeadingTicks ?? 0) > 0) {
+    creature.wanderHeadingTicks = (creature.wanderHeadingTicks ?? 0) - 1;
+  } else {
+    heading = normalizeAngle(heading + rng.range(-steering.wander_jitter_rad, steering.wander_jitter_rad));
+    creature.wanderHeadingTicks = steering.wander_persistence_ticks;
+  }
+  creature.heading = heading;
+  return dirFromHeading(heading);
+}
+
+/**
+ * Наблюдаемый режим активности после resolveMovement/resolveActions.
+ * `transit_*` выставляется в resolveMovement при смене среды.
+ * Awake → never idle (walk/swim by medium); asleep → sleep.
+ */
+export function deriveActivity(creature: Creature, action: string, currentTick: number): Activity {
+  // transit_* держится один тик (transitUntilTick = setTick+1); без until — legacy sticky → сброс.
+  if (
+    (creature.activity === "transit_in" || creature.activity === "transit_out") &&
+    creature.transitUntilTick !== undefined &&
+    currentTick < creature.transitUntilTick
+  ) {
+    return creature.activity;
+  }
+  if (creature.isAsleep || action === "sleep") return "sleep";
+  if (action === "flee") return "flee";
+  if (HUNT_ACTIONS.has(action)) return "hunt";
+  if (FORAGE_ACTIONS.has(action)) return "forage";
+  const medium = mediumAtSim(creature.pos.x, creature.pos.y);
+  return medium === "ice" ? "walk" : "swim";
 }
 
 /**
@@ -31,6 +156,7 @@ function mediumOf(zone: ZoneName): Medium {
  * существа-цели для действий, ссылающихся на другую особь (approach, court,
  * hunt, stealth_approach, coordinate_hunt, flee — от которой, наоборот,
  * убегаем).
+ * Правило: asleep = still; awake = always moving (wander fallback).
  */
 export function resolveMovement(
   creature: Creature,
@@ -41,46 +167,87 @@ export function resolveMovement(
   currentTick: number,
   rng: Rng,
 ): void {
+  const steering = getSimConstants().movement.steering;
   const ageStage = ageStageFor(creature.species, ageWeeksAt(creature.bornAtTick, currentTick));
-  const medium = mediumOf(creature.zone);
-  let speed = speedForAgeStage(creature.species, medium, ageStage) * fatigueSpeedMultiplier(creature);
-  if (action === "stealth_approach") {
-    speed *= getSimConstants().movement.stealth_approach.speed_multiplier;
+  const medium = mediumAtSim(creature.pos.x, creature.pos.y);
+  // Касатка на земле невозможна — до шага сдвигаем в воду (иначе baseSpeed бросит).
+  if (creature.species === "orca" && medium === "ice") {
+    creature.pos = pushOrcaOffLand(creature.pos.x, creature.pos.y, bounds);
   }
-
-  let dir: Vector2 | undefined;
-  if (targetPos && (MOVING_ACTIONS_WITH_CREATURE_TARGET.has(action) || action === "goto_food")) {
-    const dx = targetPos.x - creature.pos.x;
-    const dy = targetPos.y - creature.pos.y;
-    const mag = Math.hypot(dx, dy) || 1;
-    dir = action === "flee" ? { x: -dx / mag, y: -dy / mag } : { x: dx / mag, y: dy / mag };
-  } else if (action === "wander") {
-    const angle = rng.range(0, Math.PI * 2);
-    dir = { x: Math.cos(angle), y: Math.sin(angle) };
+  const mediumNow: Medium = mediumAtSim(creature.pos.x, creature.pos.y);
+  let speed = speedForAgeStage(creature.species, mediumNow === "ice" && creature.species === "orca" ? "water" : mediumNow, ageStage) * fatigueSpeedMultiplier(creature);
+  if (creature.species === "orca" && mediumNow === "ice") {
+    // Ещё на земле после push — двигаемся как по воде к воде.
+    speed = speedForAgeStage(creature.species, "water", ageStage) * fatigueSpeedMultiplier(creature);
   }
+  const actionMult = getSimConstants().movement.action_speed_multipliers;
+  if (action === "hunt") speed *= actionMult.hunt;
+  else if (action === "coordinate_hunt") speed *= actionMult.coordinate_hunt;
+  else if (action === "flee") speed *= actionMult.flee;
+  else if (action === "stealth_approach") speed *= actionMult.stealth_approach;
 
-  if (!dir) {
+  // Asleep = still (XOR with continuous move when awake).
+  if (action === "sleep" || creature.isAsleep) {
     creature.velocity = { x: 0, y: 0 };
     return;
   }
 
-  const velocity = { x: dir.x * speed, y: dir.y * speed };
+  let desiredDir: Vector2 | undefined;
+  let steeringAsWander = action === "wander";
+  if (targetPos && (MOVING_ACTIONS_WITH_CREATURE_TARGET.has(action) || action === "goto_food")) {
+    const dx = targetPos.x - creature.pos.x;
+    const dy = targetPos.y - creature.pos.y;
+    const mag = Math.hypot(dx, dy) || 1;
+    desiredDir = action === "flee" ? { x: -dx / mag, y: -dy / mag } : { x: dx / mag, y: dy / mag };
+  } else if (action === "wander") {
+    desiredDir = pickWanderDir(creature, rng, steering);
+  }
+
+  // Awake with no goal vector → force wander at full speed (never velocity 0).
+  if (!desiredDir) {
+    desiredDir = pickWanderDir(creature, rng, steering);
+    steeringAsWander = true;
+  }
+
+  let heading = ensureHeading(creature, rng);
+  if (!steeringAsWander) {
+    const desiredHeading = Math.atan2(desiredDir.y, desiredDir.x);
+    heading = turnHeadingToward(heading, desiredHeading, steering.max_turn_rad_per_tick);
+    creature.heading = heading;
+  }
+
+  if (targetPos && action !== "flee" && !steeringAsWander) {
+    const dist = Math.hypot(targetPos.x - creature.pos.x, targetPos.y - creature.pos.y);
+    if (dist < steering.arrival_slow_radius_units) {
+      // Essentially arrived: keep moving via wander rather than crawling to a stop.
+      const arrivedEps = Math.max(2, steering.arrival_slow_radius_units * 0.1);
+      if (dist <= arrivedEps) {
+        pickWanderDir(creature, rng, steering);
+        heading = creature.heading ?? heading;
+      } else {
+        const factor = Math.max(0.25, dist / steering.arrival_slow_radius_units);
+        speed *= factor;
+      }
+    }
+  }
+
+  const velocity = { x: Math.cos(heading) * speed, y: Math.sin(heading) * speed };
   const result = stepAndReflect(creature.pos, velocity, bounds);
   creature.pos = result.position;
   creature.velocity = result.velocity;
-  creature.zone = zoneAt(creature.pos.x, creature.pos.y).name;
 
-  // Касатка физически не может оказаться на льду (нет среды передвижения
-  // там, world/movement.ts бросает исключение) — любое действие (включая
-  // wander со случайным направлением) может по прямой пересечь границу
-  // вода/лёд, поэтому граница здесь — общий предохранитель, а не
-  // специфика конкретного действия.
-  if (creature.species === "orca" && mediumOf(creature.zone) === "ice") {
-    const waterMinX = Math.min(...buildZoneLayout().filter((z) => z.type === "water").map((z) => z.x0));
-    creature.pos = { x: waterMinX, y: creature.pos.y };
-    creature.velocity = { x: -creature.velocity.x, y: creature.velocity.y };
-    creature.zone = zoneAt(creature.pos.x, creature.pos.y).name;
+  // Клиренс тела от суши: якорь — центр, радиус ≈ визуальный размер спрайта.
+  clearBodyFromLand(creature, bounds);
+
+  const mediumAfter: Medium = mediumAtSim(creature.pos.x, creature.pos.y);
+  const prevMedium = creature.lastMedium ?? mediumNow;
+  if (prevMedium !== mediumAfter) {
+    // transit_in = вход в воду; transit_out = выход на лёд.
+    creature.activity = mediumAfter === "water" ? "transit_in" : "transit_out";
+    creature.transitUntilTick = currentTick + 1;
   }
+  creature.lastMedium = mediumAfter;
+  creature.zone = ecoZoneAtSim(creature.pos.x, creature.pos.y);
 }
 
 /** goto_food/flee/approach/court/hunt/stealth_approach/coordinate_hunt — целевая точка движения. */
@@ -129,59 +296,42 @@ export interface HuntConditions {
 }
 
 /**
- * Шаг 6: вероятностная модель охоты (А.10) со всеми модификаторами +
- * влияние навыков (hunting касатки, evasion жертвы — А.4). `noticedInAdvance`
- * реализует "жертва заметила касатку заранее" через ту же формулу навыка,
- * что и общий P(уклонения) А.4 (`base × (0.6+0.8×evasion)`), домноженную на
- * воспринимаемую жертвой угрозу ОТ ЭТОЙ касатки — так `stealth_approach`
- * (который эту угрозу подавляет, 7.8.2) реально снижает шанс "быть
- * замеченным заранее" при последующей атаке, а не только косметически.
+ * Касание при охоте = смерть (UX 2026-08-01). Удача А.10 живёт в pre_contact
+ * (срыв/flee); здесь всегда caught=true. noticedInAdvance — для сигналов/логов.
  */
 export function resolveHunt(orca: Creature, prey: Creature, conditions: HuntConditions, currentTick: number, rng: Rng): HuntOutcome {
+  void conditions;
+  const noticedInAdvance = rollHuntNotice(orca, prey, currentTick, rng);
+  orca.needs.hunger = clamp(orca.needs.hunger - getSimConstants().hunting.hunger_reduction_per_kill, 0, 1);
+  return { caught: true, noticedInAdvance, successProbability: 1 };
+}
+
+/** P(заметил заранее) — evasion × threat; до контакта → commit flee. */
+export function rollHuntNotice(orca: Creature, prey: Creature, _currentTick: number, rng: Rng): boolean {
   const constants = getSimConstants();
   const h = constants.hunting;
   const skillConf = constants.skills.outcome_multiplier;
-  const preyAgeStage = ageStageFor(prey.species, ageWeeksAt(prey.bornAtTick, currentTick));
-  const orcaAgeStage = ageStageFor(orca.species, ageWeeksAt(orca.bornAtTick, currentTick));
-
-  const perceivedThreatOfOrca = prey.perceivedStates.get(orca.id)?.perceivedThreat ?? 0.4;
+  const perceivedThreatOfOrca = prey.perceivedStates.get(orca.id)?.perceivedThreat ?? h.prey_threat.baseline;
   const noticeSkillMult = skillConf.base + skillConf.skill_weight * prey.skills.evasion;
   const pNotice = clamp(
     h.notice_in_advance_base_probability * noticeSkillMult * fatigueSkillMultiplier(prey) * (0.5 + perceivedThreatOfOrca),
     0,
     1,
   );
-  const noticedInAdvance = rng.bool(pNotice);
-
-  let p = constants.world.base_hunt_success_probability;
-  if (preyAgeStage === "juvenile") p *= h.juvenile_prey_multiplier;
-  if (preyAgeStage === "old") p *= h.old_prey_multiplier;
-  if (conditions.groupProtected) {
-    p *= conditions.coordinated
-      ? constants.kinship.coordinate_hunt.group_defense_multiplier_with_coordination
-      : constants.kinship.coordinate_hunt.group_defense_multiplier_without_coordination;
-  }
-  if (noticedInAdvance) p *= h.noticed_in_advance_multiplier;
-  if (orca.needs.hunger >= h.hungry_hunter_hunger_threshold) p *= h.hungry_hunter_multiplier;
-  if (conditions.guarded) p *= constants.kinship.guard_offspring.offspring_hunt_success_multiplier;
-
-  let skillMult = skillConf.base + skillConf.skill_weight * orca.skills.hunting;
-  skillMult *= fatigueSkillMultiplier(orca);
-  if (orcaAgeStage === "juvenile") skillMult *= constants.life_stages.juvenile_self_feeding_efficiency;
-
-  const successProbability = clamp(p * skillMult, 0, 1);
-  const caught = rng.bool(successProbability);
-  if (caught) {
-    orca.needs.hunger = clamp(orca.needs.hunger - h.hunger_reduction_per_kill, 0, 1);
-  }
-  return { caught, noticedInAdvance, successProbability };
+  return rng.bool(pNotice);
 }
 
 /** Шаг 6: stealth_approach — сигнал (7.8.2), подавляющий воспринимаемую жертвой угрозу от ЭТОЙ касатки. */
 export function resolveStealthApproach(orca: Creature, prey: Creature, currentTick: number): void {
   const constants = getSimConstants();
-  const existing = prey.perceivedStates.get(orca.id) ?? { perceivedVigor: 0.5, perceivedThreat: 0.4, lastSignalTick: -Infinity };
+  const existing = prey.perceivedStates.get(orca.id) ?? {
+    perceivedVigor: 0.5,
+    perceivedThreat: getSimConstants().hunting.prey_threat.baseline,
+    lastSignalTick: -Infinity,
+  };
   existing.perceivedThreat *= constants.movement.stealth_approach.perceived_threat_multiplier;
+  // Пол не даёт underflow до denormal (pg `real` падает на ~1e-60).
+  existing.perceivedThreat = clamp(existing.perceivedThreat, 0.01, 1);
   existing.lastSignalTick = currentTick;
   prey.perceivedStates.set(orca.id, existing);
 }
@@ -262,5 +412,12 @@ export function resolveSignal(
 }
 
 export function resolveSleepToggle(creature: Creature, chosenAction: string): void {
+  // Пингвин может спать только на земле (маска DS: континенты + bergs).
+  if (chosenAction === "sleep" && creature.species === "penguin") {
+    if (!isLandSim(creature.pos.x, creature.pos.y)) {
+      creature.isAsleep = false;
+      return;
+    }
+  }
   creature.isAsleep = chosenAction === "sleep";
 }

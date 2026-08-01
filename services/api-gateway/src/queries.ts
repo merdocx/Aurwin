@@ -11,12 +11,19 @@ import type { Pool } from "pg";
 export interface WorldClock {
   tick: number;
   phase: "day" | "night";
+  fishDensity: Record<string, number>;
 }
 
 export async function getWorldClock(pool: Pool): Promise<WorldClock> {
-  const result = await pool.query<{ tick: string; phase: string }>(`SELECT tick, phase FROM world_clock WHERE id = 1`);
-  if (result.rows.length === 0) return { tick: 0, phase: "day" };
-  return { tick: Number(result.rows[0].tick), phase: result.rows[0].phase as "day" | "night" };
+  const result = await pool.query<{ tick: string; phase: string; fish_density: Record<string, number> | null }>(
+    `SELECT tick, phase, fish_density FROM world_clock WHERE id = 1`,
+  );
+  if (result.rows.length === 0) return { tick: 0, phase: "day", fishDensity: {} };
+  return {
+    tick: Number(result.rows[0].tick),
+    phase: result.rows[0].phase as "day" | "night",
+    fishDensity: result.rows[0].fish_density ?? {},
+  };
 }
 
 export interface LiveCreatureRow {
@@ -28,12 +35,13 @@ export interface LiveCreatureRow {
   zone: string;
   emotion: { valence: number; arousal: number };
   is_asleep: boolean;
+  activity: string | null;
   born_at_tick: string;
 }
 
 export async function getAliveCreaturesLight(pool: Pool): Promise<LiveCreatureRow[]> {
   const result = await pool.query<LiveCreatureRow>(
-    `SELECT id, species, name, pos_x, pos_y, zone, emotion, is_asleep, born_at_tick
+    `SELECT id, species, name, pos_x, pos_y, zone, emotion, is_asleep, activity, born_at_tick
      FROM creatures WHERE died_at_tick IS NULL`,
   );
   return result.rows;
@@ -73,12 +81,14 @@ export interface CreatureCardRow {
   skills: Record<string, number>;
   is_asleep: boolean;
   narrative_facts: string[];
+  intentions: Array<{ text: string; effect?: Record<string, unknown> }>;
+  habits: Record<string, number>;
 }
 
 export async function getCreatureCard(pool: Pool, id: string): Promise<CreatureCardRow | undefined> {
   const result = await pool.query<CreatureCardRow>(
     `SELECT id, species, name, sex, born_at_tick, died_at_tick, death_cause,
-            traits, needs, emotion, skills, is_asleep, narrative_facts
+            traits, needs, emotion, skills, is_asleep, narrative_facts, intentions, habits
      FROM creatures WHERE id = $1`,
     [id],
   );
@@ -105,20 +115,56 @@ export interface SocialGraphEdge {
   a: string;
   b: string;
   strength: number;
+  /** friend = дружба, mate = пара/любовь, kin = родство (родитель–потомок). */
+  kind: "friend" | "mate" | "kin";
 }
 
 export async function getSocialGraph(pool: Pool): Promise<{ nodes: SocialGraphNode[]; edges: SocialGraphEdge[] }> {
-  const [nodesResult, edgesResult] = await Promise.all([
+  const [nodesResult, bondsResult, kinResult] = await Promise.all([
     pool.query<SocialGraphNode>(`SELECT id, species, name FROM creatures WHERE died_at_tick IS NULL`),
-    // aversions наружу не отдаются (А.6): страхи существа — часть его
-    // внутреннего мира, не публичная социальная структура.
-    pool.query<{ creature_a: string; creature_b: string; strength: number }>(
-      `SELECT creature_a, creature_b, strength FROM bonds WHERE kind = 'friend'`,
+    // aversions наружу не отдаются (А.6).
+    pool.query<{ creature_a: string; creature_b: string; strength: number; kind: "friend" | "mate" }>(
+      `SELECT creature_a, creature_b, strength, kind FROM bonds WHERE kind IN ('friend', 'mate')`,
     ),
+    pool.query<{ child_id: string; parent_id: string }>(`
+      SELECT c.id AS child_id, p.id AS parent_id
+      FROM creatures c
+      JOIN creatures p ON p.id IN (c.parent_a, c.parent_b)
+      WHERE c.died_at_tick IS NULL AND p.died_at_tick IS NULL
+    `),
   ]);
+
+  const edgeKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+  const edges = new Map<string, SocialGraphEdge>();
+
+  for (const r of bondsResult.rows) {
+    const key = edgeKey(r.creature_a, r.creature_b);
+    const existing = edges.get(key);
+    // mate важнее friend при дубликате.
+    if (!existing || (existing.kind === "friend" && r.kind === "mate")) {
+      edges.set(key, {
+        a: r.creature_a,
+        b: r.creature_b,
+        strength: Number(r.strength),
+        kind: r.kind,
+      });
+    }
+  }
+
+  for (const r of kinResult.rows) {
+    const key = edgeKey(r.child_id, r.parent_id);
+    if (edges.has(key)) continue; // уже friend/mate — не перекрываем
+    edges.set(key, {
+      a: r.parent_id,
+      b: r.child_id,
+      strength: 0.55,
+      kind: "kin",
+    });
+  }
+
   return {
     nodes: nodesResult.rows,
-    edges: edgesResult.rows.map((r) => ({ a: r.creature_a, b: r.creature_b, strength: r.strength })),
+    edges: [...edges.values()],
   };
 }
 

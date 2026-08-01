@@ -1,5 +1,5 @@
 import type { Pool } from "pg";
-import { estimateCostUsd, modelFor, type AnthropicTransport } from "./anthropic.js";
+import { estimateCostUsd, modelFor, modelForEvent, type AnthropicTransport } from "./anthropic.js";
 import { applyReflectionResult } from "./apply.js";
 import { getConstants } from "./constants.js";
 import { fetchPendingQueuedReflections, fetchWorldTick, markReflectionFailed, markReflectionSent, type QueuedReflectionRow } from "./db.js";
@@ -7,6 +7,7 @@ import { recordLlmCall } from "./metrics.js";
 import { selectCandidates } from "./queue.js";
 import { rebuildNameToId } from "./request.js";
 import { validateReflectionResponse, type ValidatedReflection } from "./validate.js";
+import type { ReflectionRequestPayload } from "./types.js";
 
 /** Экспоненциальный бэкофф ретраев при недоступности API (7.3, деградация) — не константа баланса симуляции (А.9), а рабочий параметр процесса. */
 const BACKOFF_BASE_MS = Number(process.env.REFLECTION_BACKOFF_BASE_MS ?? 5_000);
@@ -125,7 +126,9 @@ export class ReflectionWorker {
   }
 
   private async processEvent(row: QueuedReflectionRow): Promise<ReflectionOutcome> {
-    const model = modelFor("event");
+    const payload = row.request as ReflectionRequestPayload;
+    const episodeTypes = (payload?.new_episodes ?? []).map((e) => e.type);
+    const model = modelForEvent(episodeTypes);
     const first = await this.attemptCall(model, "event", JSON.stringify(row.request));
     if (!first.ok) {
       this.recordTransportFailure(row.id);
@@ -214,7 +217,7 @@ export class ReflectionWorker {
         model,
         status: "ok",
         latencySeconds: 0,
-        costUsd: estimateCostUsd(model, result.inputTokens ?? 0, result.outputTokens ?? 0),
+        costUsd: estimateCostUsd(model, result.inputTokens ?? 0, result.outputTokens ?? 0, { batch: true }),
       });
 
       let validated = await this.validateAgainstRow(row, result.text, result.stopReason);

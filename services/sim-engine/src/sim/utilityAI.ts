@@ -4,9 +4,10 @@ import { ageStageFor, ageWeeksAt } from "./lifecycle.js";
 import { isForbiddenPair } from "./reproduction.js";
 import { sleepUtilityBias } from "./needs.js";
 import { attractiveness, distance, normalizedDistance } from "./huntingAttractiveness.js";
-import { perceptionRadiusFor } from "./perception.js";
+import { visionRange } from "./perception.js";
 import type { Phase } from "../world/dayNight.js";
-import { buildZoneLayout, type ZoneName } from "../world/zones.js";
+import { type ZoneName } from "../world/zones.js";
+import { isLandSim, mediumAtSim } from "../world/landMask.js";
 import type { AgeStage, Creature, DecisionFactor, Traits } from "./types.js";
 
 /**
@@ -31,6 +32,11 @@ function zoneRisk(zone: ZoneName): number {
   return ZONE_RISK[zone] ?? 0.3;
 }
 
+function zoneAtPos(creature: Creature) {
+  // medium — от маски земли; имя зоны — мягкий eco-ярлык на creature.zone.
+  return { name: creature.zone as ZoneName, type: mediumAtSim(creature.pos.x, creature.pos.y) };
+}
+
 /**
  * Касатка физически не может преследовать пингвина на льду (нет среды
  * передвижения — `world/movement.ts` бросает исключение для касатки на
@@ -38,7 +44,8 @@ function zoneRisk(zone: ZoneName): number {
  * для hunt/stealth_approach/coordinate_hunt ограничены водными зонами.
  */
 function isWaterZone(zone: ZoneName): boolean {
-  return buildZoneLayout().find((z) => z.name === zone)?.type === "water";
+  // Кормовые/охотничьи цели — водные эко-регионы (не полосы).
+  return zone === "north_bay" || zone === "south_shallows" || zone === "open_water";
 }
 
 export interface DecideContext {
@@ -99,14 +106,18 @@ function playfulTerm(creature: Creature): number {
   return Math.max(0, creature.emotion.valence) * (1 - creature.emotion.arousal * 0.5);
 }
 
-function intentionTerm(creature: Creature, zone: ZoneName | undefined, targetId: string | undefined, isCourt: boolean): number {
+function intentionTerm(creature: Creature, action: string, zone: ZoneName | undefined, targetId: string | undefined, isCourt: boolean): number {
   let total = 0;
+  const { zone_preference, hunt_with_bonus } = getSimConstants().utility_ai.intention_effects;
   for (const intention of creature.intentions) {
     const eff = intention.effect;
     if (zone && eff.zone_penalty?.[zone] !== undefined) total -= eff.zone_penalty[zone]!;
     if (zone && eff.zone_bonus?.[zone] !== undefined) total += eff.zone_bonus[zone]!;
+    if (zone && eff.prefer_zone === zone) total += zone_preference;
+    if (zone && eff.avoid_zone === zone) total -= zone_preference;
     if (targetId && eff.approach_bonus?.creature === targetId) total += eff.approach_bonus.value;
     if (targetId && eff.avoid_creature?.creature === targetId) total -= eff.avoid_creature.value;
+    if (action === "hunt" && targetId && eff.hunt_with === targetId) total += hunt_with_bonus;
     if (isCourt && eff.seek_mate) total += 0.3;
   }
   return total;
@@ -119,6 +130,19 @@ interface Candidate {
   utility: number;
   breakdown: Record<string, number>;
 }
+
+const MOVING_ACTIONS = new Set([
+  "wander",
+  "goto_food",
+  "flee",
+  "hunt",
+  "approach",
+  "court",
+  "stealth_approach",
+  "coordinate_hunt",
+]);
+
+const HYSTERESIS_OVERRIDE = new Set(["flee", "hunt", "sleep"]);
 
 function finalize(name: string, zone: ZoneName | undefined, targetId: string | undefined, breakdown: Record<string, number>, rng: Rng, noiseMax: number): Candidate {
   const noise = rng.noise(noiseMax);
@@ -159,50 +183,40 @@ export function decide(ctx: DecideContext): Decision {
 
   const candidates: Candidate[] = [];
 
-  // idle — гарантированный минимальный вариант (всегда доступен).
-  candidates.push(
-    finalize(
-      "idle",
-      creature.zone,
-      undefined,
-      { baseline: 0.05, habit: habitTerm(creature, creature.zone) * 0.3 },
-      rng,
-      noiseMax,
-    ),
-  );
-
-  // wander — движимо любопытством.
-  candidates.push(
-    finalize(
-      "wander",
-      creature.zone,
-      undefined,
-      {
-        baseline: 0.08,
-        trait: traitTerm(creature, (t) => t.curiosity * 0.3),
-        habit: habitTerm(creature, creature.zone),
-        emotion: playfulTerm(creature) * 0.1,
-      },
-      rng,
-      noiseMax,
-    ),
-  );
+  // wander — движимо любопытством; при высоком голоде ослабляется (пингвин).
+  {
+    const wanderBreakdown: Record<string, number> = {
+      baseline: 0.08,
+      trait: traitTerm(creature, (t) => t.curiosity * 0.3),
+      habit: habitTerm(creature, creature.zone),
+      emotion: playfulTerm(creature) * 0.1,
+      intention: intentionTerm(creature, "wander", creature.zone, undefined, false),
+    };
+    if (creature.species === "penguin" && creature.needs.hunger > 0.55) {
+      wanderBreakdown.hunger_penalty = -(creature.needs.hunger - 0.55) * 0.5;
+    }
+    candidates.push(finalize("wander", creature.zone, undefined, wanderBreakdown, rng, noiseMax));
+  }
 
   // sleep — давление сна + хронотип/сутки (7.10).
-  candidates.push(
-    finalize(
-      "sleep",
-      creature.zone,
-      undefined,
-      {
-        need: needTerm(creature, { sleep: creature.needs.sleep_pressure, energy: 1 - creature.needs.energy }),
-        chronotype: sleepUtilityBias(creature, isNight),
-        habit: habitTerm(creature, creature.zone) * 0.5,
-      },
-      rng,
-      noiseMax,
-    ),
-  );
+  // Пингвин спит только на земле (маска DS).
+  const canSleep = creature.species !== "penguin" || isLandSim(creature.pos.x, creature.pos.y);
+  if (canSleep) {
+    candidates.push(
+      finalize(
+        "sleep",
+        creature.zone,
+        undefined,
+        {
+          need: needTerm(creature, { sleep: creature.needs.sleep_pressure, energy: 1 - creature.needs.energy }),
+          chronotype: sleepUtilityBias(creature, isNight),
+          habit: habitTerm(creature, creature.zone) * 0.5,
+        },
+        rng,
+        noiseMax,
+      ),
+    );
+  }
 
   if (creature.species === "penguin") {
     decidePenguinActions(candidates, ctx, ageStage, ageWeeks, isNight, noiseMax);
@@ -211,7 +225,35 @@ export function decide(ctx: DecideContext): Decision {
   }
 
   candidates.sort((a, b) => b.utility - a.utility);
-  const best = candidates[0];
+  let best = candidates[0];
+
+  const steering = constants.movement.steering;
+  const hysteresis = steering.action_hysteresis_utility;
+  const lastAction = creature.lastAction;
+  const lastCandidate = lastAction ? candidates.find((c) => c.name === lastAction) : undefined;
+  const isOverride = HYSTERESIS_OVERRIDE.has(best.name);
+  const isCommittingAction = (creature.actionCommitTicks ?? 0) > 0;
+
+  if (isCommittingAction) {
+    creature.actionCommitTicks = (creature.actionCommitTicks ?? 0) - 1;
+  }
+  if (!isOverride && isCommittingAction && lastCandidate) {
+    best = lastCandidate;
+  }
+  if (
+    !isOverride &&
+    !isCommittingAction &&
+    lastAction &&
+    MOVING_ACTIONS.has(lastAction) &&
+    lastCandidate &&
+    (best.name === "wander" || best.utility - lastCandidate.utility < hysteresis)
+  ) {
+    best = lastCandidate;
+  }
+
+  if (best.name !== lastAction) {
+    creature.actionCommitTicks = steering.action_commit_ticks;
+  }
 
   const factors: DecisionFactor[] = candidates.map((c) => ({
     action: c.targetId ? `${c.name}(${c.targetId})` : c.name,
@@ -230,22 +272,29 @@ function decidePenguinActions(
   isNight: boolean,
   noiseMax: number,
 ): void {
-  const { creature, visible, fishAvailability, bondStrength, aversionStrength, rng, currentTick } = ctx;
+  const { creature, visible, fishAvailability, bondStrength, aversionStrength, rng, currentTick, phase } = ctx;
   const constants = getSimConstants();
   const feedingZones = Object.keys(constants.world.fish_respawn_per_tick) as ZoneName[];
+  const hungerBoost = creature.needs.hunger * 0.4;
 
-  // goto_food: лучшая по (доступность рыбы + личная привычка - осторожность*риск) кормовая зона.
+  // goto_food: лучшая по (доступность рыбы + личная привычка - осторожность*риск - воспринятая угроза зоны) кормовая зона.
   let bestFeedingZone: ZoneName = feedingZones[0];
   let bestFeedingScore = -Infinity;
   for (const zone of feedingZones) {
+    const perceivedThreat = creature.perceivedZoneThreat.get(zone) ?? 0;
     const score =
-      fishAvailability(zone) * 0.6 + (creature.habits[zone] ?? 0) * 0.3 - creature.traits.caution * zoneRisk(zone) * 0.4;
+      fishAvailability(zone) * 0.6 +
+      (creature.habits[zone] ?? 0) * 0.3 -
+      creature.traits.caution * zoneRisk(zone) * 0.4 -
+      perceivedThreat * 0.5 +
+      intentionTerm(creature, "goto_food", zone, undefined, false);
     if (score > bestFeedingScore) {
       bestFeedingScore = score;
       bestFeedingZone = zone;
     }
   }
   if (creature.zone !== bestFeedingZone) {
+    const zoneThreat = creature.perceivedZoneThreat.get(bestFeedingZone) ?? 0;
     candidates.push(
       finalize(
         "goto_food",
@@ -253,10 +302,31 @@ function decidePenguinActions(
         undefined,
         {
           need: needTerm(creature, { hunger: creature.needs.hunger }),
+          hunger_boost: hungerBoost,
           skill: skillTerm(creature, creature.skills.foraging),
           habit: habitTerm(creature, bestFeedingZone),
           trait: traitTerm(creature, (t) => t.courage * zoneRisk(bestFeedingZone) * 0.3 - t.caution * zoneRisk(bestFeedingZone) * 0.3),
-          intention: intentionTerm(creature, bestFeedingZone, undefined, false),
+          threat: -zoneThreat * 0.4,
+          intention: intentionTerm(creature, "goto_food", bestFeedingZone, undefined, false),
+        },
+        rng,
+        noiseMax,
+      ),
+    );
+  }
+
+  // Пингвин на воде с высоким давлением сна — стремится к льду (main_ice).
+  const onWater = !isLandSim(creature.pos.x, creature.pos.y);
+  if (onWater && creature.needs.sleep_pressure > constants.day_night.fatigue_penalty.sleep_pressure_threshold) {
+    candidates.push(
+      finalize(
+        "goto_food",
+        "main_ice",
+        undefined,
+        {
+          need: needTerm(creature, { sleep: creature.needs.sleep_pressure }),
+          habit: habitTerm(creature, "main_ice"),
+          sleep_land: creature.needs.sleep_pressure * 0.5,
         },
         rng,
         noiseMax,
@@ -273,6 +343,7 @@ function decidePenguinActions(
         undefined,
         {
           need: needTerm(creature, { hunger: creature.needs.hunger * 1.5 }),
+          hunger_boost: hungerBoost,
           skill: skillTerm(creature, creature.skills.foraging),
           habit: habitTerm(creature, creature.zone),
         },
@@ -284,6 +355,7 @@ function decidePenguinActions(
 
   // Видимые касатки -> flee / display_vigor / alarm_call.
   const orcasVisible = visible.filter((v) => v.species === "orca");
+  const preyThreat = constants.hunting.prey_threat;
   if (orcasVisible.length > 0) {
     let nearestOrca = orcasVisible[0];
     let nearestDist = distance(creature.pos, nearestOrca.pos);
@@ -294,7 +366,10 @@ function decidePenguinActions(
         nearestOrca = orca;
       }
     }
-    const perceivedThreat = creature.perceivedStates.get(nearestOrca.id)?.perceivedThreat ?? 0.4;
+    const perceivedThreat = creature.perceivedStates.get(nearestOrca.id)?.perceivedThreat ?? preyThreat.baseline;
+    const orcaAversion = aversionStrength(nearestOrca.id);
+    const senseR = visionRange(creature, phase) || 1;
+    const proximity = preyThreat.flee_proximity_weight * (1 - Math.min(1, nearestDist / senseR));
 
     candidates.push(
       finalize(
@@ -303,10 +378,12 @@ function decidePenguinActions(
         nearestOrca.id,
         {
           threat: perceivedThreat * 1.2,
+          proximity,
+          aversion: orcaAversion * 0.5,
           trait: traitTerm(creature, (t) => t.caution * 0.5 - t.courage * 0.3),
           skill: skillTerm(creature, creature.skills.evasion),
           emotion: fearTerm(creature) * 0.5,
-          intention: intentionTerm(creature, undefined, nearestOrca.id, false),
+          intention: intentionTerm(creature, "flee", creature.zone, nearestOrca.id, false),
         },
         rng,
         noiseMax,
@@ -343,7 +420,12 @@ function decidePenguinActions(
 
   // socialize / approach(friend) / court(partner)
   const penguinsVisible = visible.filter((v) => v.species === "penguin" && v.id !== creature.id);
+  const socialPredatorPenalty = orcasVisible.length > 0 ? -preyThreat.social_suppress : 0;
   if (penguinsVisible.length > 0) {
+    let maxPeerAversion = 0;
+    for (const other of penguinsVisible) {
+      maxPeerAversion = Math.max(maxPeerAversion, aversionStrength(other.id));
+    }
     candidates.push(
       finalize(
         "socialize",
@@ -354,6 +436,8 @@ function decidePenguinActions(
           trait: traitTerm(creature, (t) => t.sociability * 0.5),
           skill: skillTerm(creature, creature.skills.socializing),
           emotion: playfulTerm(creature) * 0.3,
+          aversion: -maxPeerAversion * 0.3,
+          predator_nearby: socialPredatorPenalty,
         },
         rng,
         noiseMax,
@@ -363,7 +447,7 @@ function decidePenguinActions(
     let bestFriend: Creature | undefined;
     let bestFriendStrength = 0;
     for (const other of penguinsVisible) {
-      const s = bondStrength(other.id);
+      const s = bondStrength(other.id) - aversionStrength(other.id);
       if (s > bestFriendStrength) {
         bestFriendStrength = s;
         bestFriend = other;
@@ -380,7 +464,9 @@ function decidePenguinActions(
             trait: traitTerm(creature, (t) => t.sociability * 0.4),
             skill: skillTerm(creature, creature.skills.socializing),
             bond: bestFriendStrength * 0.4,
-            intention: intentionTerm(creature, undefined, bestFriend.id, false),
+            aversion: -aversionStrength(bestFriend.id) * 0.4,
+            intention: intentionTerm(creature, "approach", undefined, bestFriend.id, false),
+            predator_nearby: socialPredatorPenalty,
           },
           rng,
           noiseMax,
@@ -411,7 +497,8 @@ function decidePenguinActions(
             {
               trait: traitTerm(creature, (t) => t.sociability * 0.3 + t.aggression * 0.1 + t.courage * 0.1),
               bond: bondStrength(bestMate.id) * 0.5,
-              intention: intentionTerm(creature, undefined, bestMate.id, true),
+              intention: intentionTerm(creature, "court", undefined, bestMate.id, true),
+              predator_nearby: socialPredatorPenalty,
             },
             rng,
             noiseMax,
@@ -508,9 +595,9 @@ function decideOrcaActions(
 ): void {
   const { creature, visible, bondStrength, rng, currentTick, phase } = ctx;
   const constants = getSimConstants();
-  const perceptionRadius = perceptionRadiusFor(creature, phase);
+  const perceptionRadius = visionRange(creature, phase);
 
-  const preyVisible = visible.filter((v) => v.species === "penguin" && isWaterZone(v.zone));
+  const preyVisible = visible.filter((v) => v.species === "penguin" && !isLandSim(v.pos.x, v.pos.y));
   if (preyVisible.length > 0) {
     let best: Creature | undefined;
     let bestScore = -Infinity;
@@ -545,6 +632,7 @@ function decideOrcaActions(
     }
 
     if (best) {
+      const huntHungerBoost = creature.needs.hunger * 0.4;
       candidates.push(
         finalize(
           "hunt",
@@ -552,10 +640,11 @@ function decideOrcaActions(
           best.id,
           {
             need: needTerm(creature, { hunger: creature.needs.hunger }),
+            hunger_boost: huntHungerBoost,
             skill: skillTerm(creature, creature.skills.hunting),
             trait: traitTerm(creature, (t) => t.aggression * 0.3 + t.courage * 0.2),
             attractiveness: bestScore * 0.5,
-            intention: intentionTerm(creature, best.zone, best.id, false),
+            intention: intentionTerm(creature, "hunt", best.zone, best.id, false),
           },
           rng,
           noiseMax,

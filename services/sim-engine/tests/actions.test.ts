@@ -1,69 +1,45 @@
 import { describe, expect, it } from "vitest";
-import { resolveHunt, resolveSignal, resolveEat } from "../src/sim/actions.js";
+import { resolveHunt, resolveSignal, resolveEat, rollHuntNotice } from "../src/sim/actions.js";
 import { Rng } from "../src/sim/rng.js";
 import { FishField } from "../src/world/fish.js";
 import { getSimConstants } from "../src/sim/simConstants.js";
 import { makeTestCreature } from "./testCreature.js";
 
-describe("resolveHunt (А.10 вероятностная модель)", () => {
-  it("детёныш-жертва повышает вероятность успеха относительно взрослой", () => {
-    const orca = makeTestCreature({ species: "orca", skills: { foraging: 0, evasion: 0, socializing: 0, hunting: 0.9, parenting: 0 } });
-    const preyAdult = makeTestCreature({ bornAtTick: -100000000 });
-    const preyJuvenile = makeTestCreature({ bornAtTick: 0 });
+describe("resolveHunt (касание = смерть)", () => {
+  it("при контакте всегда caught=true и снижает голод", () => {
+    const orca = makeTestCreature({
+      species: "orca",
+      needs: { hunger: 1, energy: 0.8, social: 0.2, sleep_pressure: 0.1 },
+      skills: { foraging: 0, evasion: 0, socializing: 0, hunting: 0.1, parenting: 0 },
+    });
+    const prey = makeTestCreature({ bornAtTick: 0 });
+    const outcome = resolveHunt(orca, prey, { guarded: true, coordinated: false, groupProtected: true }, 100, new Rng(1));
+    expect(outcome.caught).toBe(true);
+    expect(outcome.successProbability).toBe(1);
+    expect(orca.needs.hunger).toBeLessThan(1);
+  });
 
-    let caughtAdult = 0;
-    let caughtJuvenile = 0;
+  it("rollHuntNotice выше при высоком evasion и threat", () => {
+    const orca = makeTestCreature({ species: "orca" });
+    const shy = makeTestCreature({
+      id: "shy",
+      skills: { foraging: 0, evasion: 0.95, socializing: 0, hunting: 0, parenting: 0 },
+    });
+    shy.perceivedStates.set(orca.id, { perceivedVigor: 0.5, perceivedThreat: 1, lastSignalTick: 0 });
+    const bold = makeTestCreature({
+      id: "bold",
+      skills: { foraging: 0, evasion: 0, socializing: 0, hunting: 0, parenting: 0 },
+    });
+    bold.perceivedStates.set(orca.id, { perceivedVigor: 0.5, perceivedThreat: 0.01, lastSignalTick: 0 });
+
+    let shyNoticed = 0;
+    let boldNoticed = 0;
     const n = 2000;
     for (let i = 0; i < n; i++) {
-      const rng = new Rng(i + 1);
-      if (resolveHunt(orca, preyAdult, { guarded: false, coordinated: false, groupProtected: false }, 100, rng).caught) caughtAdult++;
-      if (resolveHunt(orca, preyJuvenile, { guarded: false, coordinated: false, groupProtected: false }, 100, rng).caught) caughtJuvenile++;
+      if (rollHuntNotice(orca, shy, 100, new Rng(i + 1))) shyNoticed++;
+      if (rollHuntNotice(orca, bold, 100, new Rng(i + 1))) boldNoticed++;
     }
-    expect(caughtJuvenile).toBeGreaterThan(caughtAdult);
-  });
-
-  it("guard_offspring снижает вероятность успеха охоты на охраняемого детёныша", () => {
-    const orca = makeTestCreature({ species: "orca", skills: { foraging: 0, evasion: 0, socializing: 0, hunting: 0.9, parenting: 0 } });
-    const prey = makeTestCreature({ bornAtTick: 0 });
-
-    let unguarded = 0;
-    let guarded = 0;
-    const n = 3000;
-    for (let i = 0; i < n; i++) {
-      const rng = new Rng(i + 1);
-      if (resolveHunt(orca, prey, { guarded: false, coordinated: false, groupProtected: false }, 100, rng).caught) unguarded++;
-      if (resolveHunt(orca, prey, { guarded: true, coordinated: false, groupProtected: false }, 100, rng).caught) guarded++;
-    }
-    expect(guarded).toBeLessThan(unguarded);
-  });
-
-  it("coordinate_hunt отменяет групповую защиту жертвы (7.9)", () => {
-    const orca = makeTestCreature({ species: "orca", skills: { foraging: 0, evasion: 0, socializing: 0, hunting: 0.9, parenting: 0 } });
-    const prey = makeTestCreature({ bornAtTick: -100000000 });
-
-    let withoutCoordination = 0;
-    let withCoordination = 0;
-    const n = 3000;
-    for (let i = 0; i < n; i++) {
-      const rng = new Rng(i + 1);
-      if (resolveHunt(orca, prey, { guarded: false, coordinated: false, groupProtected: true }, 100, rng).caught) withoutCoordination++;
-      if (resolveHunt(orca, prey, { guarded: false, coordinated: true, groupProtected: true }, 100, rng).caught) withCoordination++;
-    }
-    expect(withCoordination).toBeGreaterThan(withoutCoordination);
-  });
-
-  it("успешная охота снижает голод касатки", () => {
-    const orca = makeTestCreature({ species: "orca", needs: { hunger: 1, energy: 0.8, social: 0.2, sleep_pressure: 0.1 }, skills: { foraging: 0, evasion: 0, socializing: 0, hunting: 0.9, parenting: 0 } });
-    const prey = makeTestCreature({ bornAtTick: 0 });
-    for (let i = 0; i < 500; i++) {
-      const rng = new Rng(i + 1);
-      const outcome = resolveHunt(orca, prey, { guarded: false, coordinated: false, groupProtected: false }, 100, rng);
-      if (outcome.caught) {
-        expect(orca.needs.hunger).toBeLessThan(1);
-        return;
-      }
-    }
-    throw new Error("ни одна охота не увенчалась успехом за 500 попыток — маловероятно");
+    expect(shyNoticed).toBeGreaterThan(boldNoticed);
   });
 });
 
@@ -109,7 +85,6 @@ describe("resolveEat", () => {
   });
 
   it("детёныш кормится сам неэффективно (х0.3, 7.4/7.9)", () => {
-    const fish = new FishField();
     const adult = makeTestCreature({ zone: "north_bay", bornAtTick: -100000000, skills: { foraging: 0.9, evasion: 0, socializing: 0, hunting: 0, parenting: 0 } });
     const juvenile = makeTestCreature({ zone: "north_bay", bornAtTick: 0, skills: { foraging: 0.9, evasion: 0, socializing: 0, hunting: 0, parenting: 0 } });
 

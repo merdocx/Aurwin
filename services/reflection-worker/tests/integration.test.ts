@@ -39,7 +39,7 @@ describe("reflection-worker: интеграционный цикл эпизод 
     await pool.query(`UPDATE creatures SET is_asleep = FALSE WHERE is_asleep = TRUE`);
 
     await pool.query(
-      `INSERT INTO world_clock (id, tick, phase) VALUES (1, 500, 'day') ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick, phase = EXCLUDED.phase`,
+      `INSERT INTO world_clock (id, tick, phase) VALUES (1, 100000, 'day') ON CONFLICT (id) DO UPDATE SET tick = EXCLUDED.tick, phase = EXCLUDED.phase`,
     );
 
     const victim = await insertCreature(pool, { species: "penguin", name: "Мора" });
@@ -63,6 +63,11 @@ describe("reflection-worker: интеграционный цикл эпизод 
       const id = await insertCreature(pool, { species: i === 0 ? "orca" : "penguin", name: `Спящий${i}` });
       backgroundCreatures.push(id);
       await pool.query(`UPDATE creatures SET is_asleep = TRUE WHERE id = $1`, [id]);
+      // Непустой фон: иначе skip empty background не ставит LLM в очередь.
+      await pool.query(
+        `INSERT INTO episodes (creature_id, tick, type, participants, significance) VALUES ($1, 10, 'woken_by_alarm', '{}', 0.2)`,
+        [id],
+      );
     }
 
     const beforeTraits = new Map<string, any>();
@@ -90,7 +95,7 @@ describe("reflection-worker: интеграционный цикл эпизод 
       const after = row.rows[0];
       expect(after.narrative.length).toBeGreaterThan(0);
       expect(after.narrative_facts.length).toBeGreaterThan(0);
-      expect(Number(after.last_reflection_at)).toBe(500);
+      expect(Number(after.last_reflection_at)).toBe(100000);
       // Черты реально сдвинулись (не остались точь-в-точь как при рождении) — цель 6 раздела 2 ТЗ.
       const before = beforeTraits.get(id);
       const changed = Object.keys(before).some((k) => Math.abs(before[k] - after.traits[k]) > 1e-9);

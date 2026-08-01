@@ -68,4 +68,16 @@ describe("плотность рыбы по кормовым зонам (А.10)",
     // Сама плотность (ресурс) не меняется от чтения доступности.
     expect(fish.getDensity("north_bay")).toBeCloseTo(0.7, 9);
   });
+
+  it("snapshot/restore сохраняет плотность по зонам для персистентности", () => {
+    const fish = new FishField();
+    fish.consume("north_bay", 0.4);
+    fish.consume("south_shallows", 0.1);
+    const snap = fish.snapshot();
+
+    const restored = new FishField();
+    restored.restore(snap);
+    expect(restored.getDensity("north_bay")).toBeCloseTo(0.6, 9);
+    expect(restored.getDensity("south_shallows")).toBeCloseTo(0.9, 9);
+  });
 });
