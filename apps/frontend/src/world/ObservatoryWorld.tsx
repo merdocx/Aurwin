@@ -245,13 +245,17 @@ export const ObservatoryWorld = memo(function ObservatoryWorld({ store, onSelect
       return;
     }
     const facingEl = el.querySelector("[data-facing]") as HTMLElement | null;
-    elCache.current.set(id, {
-      el,
-      facingEl,
-      noseLed: el.dataset.noseLed === "1",
-      noseX: Number(el.dataset.noseX ?? 0),
-      noseY: Number(el.dataset.noseY ?? 0),
-    });
+    const noseLed = el.dataset.noseLed === "1";
+    const noseX = Number(el.dataset.noseX ?? 0);
+    const noseY = Number(el.dataset.noseY ?? 0);
+    // Сразу ставим известную позицию — иначе до следующего RAF вспышка в (0,0).
+    const map = posCache.current.get(id);
+    if (map) {
+      el.style.transform = noseLed
+        ? `translate3d(${map.x}px, ${map.y}px, 0)`
+        : `translate3d(${map.x}px, ${map.y}px, 0) translate(-50%, -50%)`;
+    }
+    elCache.current.set(id, { el, facingEl, noseLed, noseX, noseY });
   }, []);
 
   useEffect(() => {

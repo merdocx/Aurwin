@@ -14,12 +14,6 @@ interface CreatureFrame {
   facingInitialized: boolean;
   /** Display faceRight с гистерезисом (лёд / scaleX). */
   faceRight: boolean;
-  /** Display velocity (у.е./мс) — coast после t>1. */
-  vx: number;
-  vy: number;
-  lastSampleX: number;
-  lastSampleY: number;
-  lastSampleAt: number;
 }
 
 export interface RenderPosition {
@@ -51,16 +45,18 @@ const EVENT_DISPLAY_MS = 2500;
 /** Ring-buffer ленты событий наблюдателя (дольше badge). */
 const EVENT_LOG_MS = 16000;
 const MOVE_EPS = 0.5;
-/** Только телепорты режем; cruise/separation (≤~40) проходят без лестницы. */
-const TELEPORT_CLAMP = 100;
+/** Только явные телепорты (реинтродукция и т.п.); обычный тик ≪ этого. */
+const TELEPORT_CLAMP = 120;
 const FACING_SMOOTH = 0.18;
 /** Не крутить facing при почти вертикальном/малом смещении. */
 const FACING_DEADZONE = 0.05;
 /** Гистерезис faceRight: не флипать, пока |cos| не уверен. */
 const FACE_RIGHT_ENTER = 0.12;
 const FACE_RIGHT_EXIT = -0.12;
-/** EMA интервала между delta (мс). */
-const DURATION_EMA_ALPHA = 0.25;
+/** Лёгкая подстройка под джиттер сети вокруг tick_seconds (не разгонять lerp). */
+const DURATION_EMA_ALPHA = 0.15;
+const DURATION_MIN_FACTOR = 0.85;
+const DURATION_MAX_FACTOR = 1.25;
 /** Квант emotion для meta-сравнения — меньше churn React. */
 const EMOTION_Q = 0.05;
 
@@ -72,39 +68,18 @@ function lerpAngle(a: number, b: number, t: number): number {
 }
 
 /**
- * Линейный lerp на [0,1]; при t>1 — coast по vx/vy (без остановки на границе тика).
+ * Линейный lerp на [0,1]; при опоздании дельты держим target (без coast —
+ * coast уносил спрайты мимо цели и давал рывок на следующем rebase).
  */
 function samplePos(frame: CreatureFrame, now: number, durationMs: number): { x: number; y: number; t: number } {
   const elapsed = now - frame.updatedAt;
   const rawT = durationMs > 0 ? elapsed / durationMs : 1;
-  const dt = frame.lastSampleAt > 0 ? Math.max(0, Math.min(50, now - frame.lastSampleAt)) : 0;
-
-  let x: number;
-  let y: number;
-  if (rawT <= 1) {
-    const t = Math.max(0, rawT);
-    x = frame.prevX + (frame.targetX - frame.prevX) * t;
-    y = frame.prevY + (frame.targetY - frame.prevY) * t;
-  } else {
-    // Coast: продолжаем с последней скоростью, слегка притягиваясь к target.
-    const coastDt = Math.min(elapsed - durationMs, 200);
-    x = frame.targetX + frame.vx * coastDt;
-    y = frame.targetY + frame.vy * coastDt;
-    // Мягкий pull к target, чтобы не улететь далеко при джиттере сети.
-    x = x * 0.92 + frame.targetX * 0.08;
-    y = y * 0.92 + frame.targetY * 0.08;
-  }
-
-  if (dt > 0 && frame.lastSampleAt > 0) {
-    const invDt = 1 / Math.max(1, dt);
-    frame.vx = frame.vx * 0.65 + (x - frame.lastSampleX) * invDt * 0.35;
-    frame.vy = frame.vy * 0.65 + (y - frame.lastSampleY) * invDt * 0.35;
-  }
-
-  frame.lastSampleX = x;
-  frame.lastSampleY = y;
-  frame.lastSampleAt = now;
-  return { x, y, t: rawT };
+  const t = Math.max(0, Math.min(1, rawT));
+  return {
+    x: frame.prevX + (frame.targetX - frame.prevX) * t,
+    y: frame.prevY + (frame.targetY - frame.prevY) * t,
+    t: rawT,
+  };
 }
 
 function updateFaceRight(frame: CreatureFrame, facing: number): void {
@@ -118,7 +93,7 @@ function updateFaceRight(frame: CreatureFrame, facing: number): void {
 }
 
 /**
- * Держит состояние мира ВНЕ React. Позиции — RAF ~60 FPS с linear lerp + coast;
+ * Держит состояние мира ВНЕ React. Позиции — RAF ~60 FPS с linear lerp;
  * meta только на смене activity/emotion/sleep.
  */
 export class WorldStore {
@@ -129,7 +104,7 @@ export class WorldStore {
   tick = 0;
   phase: Phase = "day";
   metaRevision = 0;
-  /** Сглаженный интервал между delta (мс) для интерполяции. */
+  /** Сглаженный интервал между delta (мс), якорь — tick_seconds. */
   private durationMsEma = 2000;
   private lastDeltaAt = 0;
   private creatures = new Map<string, CreatureFrame>();
@@ -176,7 +151,10 @@ export class WorldStore {
   }
 
   private interpDurationMs(): number {
-    return Math.max(400, this.durationMsEma);
+    const base = Math.max(500, this.tickSeconds * 1000);
+    const lo = base * DURATION_MIN_FACTOR;
+    const hi = base * DURATION_MAX_FACTOR;
+    return Math.min(hi, Math.max(lo, this.durationMsEma));
   }
 
   private makeFrame(dto: CreatureDto, now: number): CreatureFrame {
@@ -190,11 +168,6 @@ export class WorldStore {
       facing: 0,
       facingInitialized: false,
       faceRight: true,
-      vx: 0,
-      vy: 0,
-      lastSampleX: dto.x,
-      lastSampleY: dto.y,
-      lastSampleAt: now,
     };
   }
 
@@ -242,7 +215,11 @@ export class WorldStore {
     const now = performance.now();
     if (this.lastDeltaAt > 0) {
       const measured = now - this.lastDeltaAt;
-      this.durationMsEma = this.durationMsEma * (1 - DURATION_EMA_ALPHA) + measured * DURATION_EMA_ALPHA;
+      // Игнорим вспышки <0.4s (двойной broadcast) и дыры >5s (фон/обрыв) —
+      // иначе EMA сжимает lerp и движение становится рывками.
+      if (measured >= 400 && measured <= 5000) {
+        this.durationMsEma = this.durationMsEma * (1 - DURATION_EMA_ALPHA) + measured * DURATION_EMA_ALPHA;
+      }
     } else {
       this.durationMsEma = this.tickSeconds * 1000;
     }
@@ -250,9 +227,7 @@ export class WorldStore {
     const durationMs = this.interpDurationMs();
     let metaChanged = false;
 
-    const seen = new Set<string>();
     for (const dto of msg.creatures) {
-      seen.add(dto.id);
       const existing = this.creatures.get(dto.id);
       if (existing) {
         const prevDto = existing.dto;
@@ -261,7 +236,6 @@ export class WorldStore {
         let dx = dto.x - cur.x;
         let dy = dto.y - cur.y;
         const dist = Math.hypot(dx, dy);
-        // Clamp только телепорты; обычные скачки separation/land-push пропускаем.
         if (dist > TELEPORT_CLAMP) {
           const s = TELEPORT_CLAMP / dist;
           dx *= s;
@@ -272,9 +246,6 @@ export class WorldStore {
         existing.targetX = cur.x + dx;
         existing.targetY = cur.y + dy;
         existing.updatedAt = now;
-        const invDur = 1 / Math.max(1, durationMs);
-        existing.vx = dx * invDur;
-        existing.vy = dy * invDur;
         existing.dto = dto;
         const nowMoving = Math.hypot(dx, dy) > MOVE_EPS;
         const emotionChanged =
@@ -317,7 +288,6 @@ export class WorldStore {
     this.events = this.events.filter((e) => e.receivedAt >= cutoff);
     if (metaChanged) this.metaRevision += 1;
     this.emitClock();
-    void seen;
   }
 
   handleMessage(msg: ServerMessage): void {

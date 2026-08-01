@@ -314,14 +314,17 @@ export const Creature = memo(function Creature({
       ref={(el) => registerEl?.(id, el)}
       onClick={() => onClick(id)}
       aria-label={name}
+      data-creature-id={id}
       data-nose-led={noseLed ? "1" : "0"}
       data-nose-x={nose.x}
       data-nose-y={nose.y}
       style={{
+        // Позиция только через el.style.transform в RAF.
+        // Нельзя писать transform сюда: любой React re-render сбрасывал бы
+        // существ в -9999/0 и давал «телепорт» через всю карту.
         position: "absolute",
         left: 0,
         top: 0,
-        transform: "translate3d(-9999px,-9999px,0)",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
