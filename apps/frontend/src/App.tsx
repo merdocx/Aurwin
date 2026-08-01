@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { ObservatoryWorld } from "./world/ObservatoryWorld";
-import { useWorldSocket } from "./ws/useWorldSocket";
+import { useWorldClock, useWorldSocket } from "./ws/useWorldSocket";
 import { CreatureCardPanel } from "./components/CreatureCard";
 import { SocialGraph } from "./components/SocialGraph";
 import { fetchWorldStats, type WorldStats } from "./api/client";
@@ -20,7 +20,8 @@ const EMOTION_LEGEND: Array<{ emotion: EmotionKind; label: string }> = [
 const HINT_KEY = "aurwin-observatory-hint-dismissed";
 
 export function App() {
-  const { store, status, tick, phase, errorMessage, setViewport } = useWorldSocket();
+  const { store, status, errorMessage, setViewport } = useWorldSocket();
+  const { tick, phase } = useWorldClock(store);
   const [tab, setTab] = useState<"world" | "social">("world");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedName, setSelectedName] = useState("");

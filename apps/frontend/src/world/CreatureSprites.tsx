@@ -250,12 +250,14 @@ export interface CreatureViewProps {
   id: string;
   name: string;
   species: Species;
-  x: number;
-  y: number;
+  /** Игнорируется RAF (позиция через translate3d); оставлено для совместимости. */
+  x?: number;
+  y?: number;
   emotion: EmotionKind;
   state: CreatureState;
   swimming: boolean;
   facing?: number;
+  faceRight?: boolean;
   simplified?: boolean;
   onClick: (id: string) => void;
   registerEl?: (id: string, el: HTMLButtonElement | null) => void;
@@ -273,7 +275,19 @@ function orcaDrawState(state: CreatureState): "sleeping" | "swimming" | "hunting
   return "swimming";
 }
 
-export const Creature = memo(function Creature({ id, name, species, x, y, emotion, state, swimming, facing = 0, simplified, onClick, registerEl }: CreatureViewProps) {
+export const Creature = memo(function Creature({
+  id,
+  name,
+  species,
+  emotion,
+  state,
+  swimming,
+  facing = 0,
+  faceRight: faceRightProp,
+  simplified,
+  onClick,
+  registerEl,
+}: CreatureViewProps) {
   const isOrca = species === "orca";
   const animName = STATE_ANIM[state];
   const transit = state === "entering_water" || state === "exiting_water";
@@ -291,9 +305,8 @@ export const Creature = memo(function Creature({ id, name, species, x, y, emotio
               : 4 + (id.charCodeAt(0) % 3);
   const animCss = animName ? `${animName} ${dur}s var(--ease-drift) ${transit ? "1" : "infinite"}` : "none";
   const lod = simplified === true;
-  const faceRight = Math.cos(facing) >= -0.08;
+  const faceRight = faceRightProp ?? Math.cos(facing) >= -0.08;
   const inWaterVisual = swimming || transit || state === "foraging" || state === "fleeing" || state === "hunting";
-  // Касатка всегда в воде; пингвин — носовой якорь только в плавании.
   const noseLed = isOrca || inWaterVisual;
   const nose = isOrca ? NOSE_PX.orca : NOSE_PX.penguin;
   return (
@@ -306,9 +319,9 @@ export const Creature = memo(function Creature({ id, name, species, x, y, emotio
       data-nose-y={nose.y}
       style={{
         position: "absolute",
-        left: x + "px",
-        top: y + "px",
-        transform: noseLed ? undefined : "translate(-50%,-50%)",
+        left: 0,
+        top: 0,
+        transform: "translate3d(-9999px,-9999px,0)",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
@@ -317,7 +330,7 @@ export const Creature = memo(function Creature({ id, name, species, x, y, emotio
         border: "none",
         cursor: "pointer",
         padding: 0,
-        willChange: "left, top",
+        willChange: "transform",
       }}
     >
       {!lod && state === "fleeing" && (
@@ -325,8 +338,8 @@ export const Creature = memo(function Creature({ id, name, species, x, y, emotio
           style={{
             position: "absolute",
             top: noseLed ? -14 : -10,
-            left: noseLed ? 0 : "50%",
-            transform: noseLed ? "translate(-50%,0)" : "translate(-50%,0)",
+            left: "50%",
+            transform: "translate(-50%,0)",
             fontSize: 9,
             fontFamily: "var(--font-mono)",
             color: "var(--accent-danger)",
@@ -347,7 +360,7 @@ export const Creature = memo(function Creature({ id, name, species, x, y, emotio
           flexDirection: "column",
           alignItems: "center",
           gap: 2,
-          transformOrigin: "0 0",
+          transformOrigin: noseLed ? "0 0" : "50% 50%",
           transform: noseLed ? headingTransform(facing, nose) : faceRight ? undefined : "scaleX(-1)",
         }}
       >

@@ -49,13 +49,15 @@ function seedNodes(ids: string[]): Map<string, SimNode> {
 export function SocialGraph({ onSelectCreature, active = true }: Props) {
   const [graph, setGraph] = useState<SocialGraphDto | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
-  const [, setTick] = useState(0);
   const nodesRef = useRef<Map<string, SimNode>>(new Map());
   const graphKeyRef = useRef("");
-  const simRef = useRef<{ running: boolean; raf: number | null; wake: () => void }>({
+  const nodeElsRef = useRef(new Map<string, HTMLDivElement>());
+  const edgeElsRef = useRef(new Map<string, SVGPathElement>());
+  const simRef = useRef<{ running: boolean; raf: number | null; wake: () => void; paint: () => void }>({
     running: false,
     raf: null,
     wake: () => undefined,
+    paint: () => undefined,
   });
   const dragRef = useRef<{
     id: string;
@@ -97,6 +99,33 @@ export function SocialGraph({ onSelectCreature, active = true }: Props) {
   useEffect(() => {
     if (!graph || graph.nodes.length === 0) return;
     const nodes = nodesRef.current;
+
+    function paint(): void {
+      const bonds = edgesRef.current;
+      for (const [id, el] of nodeElsRef.current) {
+        const n = nodes.get(id);
+        if (!n) continue;
+        el.style.left = `${n.x}px`;
+        el.style.top = `${n.y}px`;
+      }
+      bonds.forEach((edge, i) => {
+        const kind = edge.kind ?? "friend";
+        const key = `${edge.a}-${edge.b}-${kind}`;
+        const path = edgeElsRef.current.get(key);
+        const a = nodes.get(edge.a);
+        const b = nodes.get(edge.b);
+        if (!path || !a || !b) return;
+        const mx = (a.x + b.x) / 2;
+        const my = (a.y + b.y) / 2;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len = Math.hypot(dx, dy) || 1;
+        const bow = Math.min(40, len * 0.12) * (i % 2 === 0 ? 1 : -1);
+        const cx = mx - (dy / len) * bow;
+        const cy = my + (dx / len) * bow;
+        path.setAttribute("d", `M${a.x},${a.y} Q${cx},${cy} ${b.x},${b.y}`);
+      });
+    }
 
     function loop(): void {
       const nodeArr = [...nodes.values()];
@@ -165,7 +194,7 @@ export function SocialGraph({ onSelectCreature, active = true }: Props) {
         ke += n.vx * n.vx + n.vy * n.vy;
       }
 
-      setTick((t) => t + 1);
+      paint();
       if (ke < 0.04 && !anyDragging) {
         simRef.current.running = false;
         simRef.current.raf = null;
@@ -181,6 +210,8 @@ export function SocialGraph({ onSelectCreature, active = true }: Props) {
     }
 
     simRef.current.wake = startSim;
+    simRef.current.paint = paint;
+    paint();
     startSim();
     return () => {
       simRef.current.running = false;
@@ -230,7 +261,7 @@ export function SocialGraph({ onSelectCreature, active = true }: Props) {
     n.y = Math.max(PAD, Math.min(GRAPH_H - PAD, n.y + dy / scale));
     d.lastX = e.clientX;
     d.lastY = e.clientY;
-    setTick((t) => t + 1);
+    simRef.current.paint();
   }
 
   function onNodeUp(id: string, e: ReactPointerEvent<HTMLDivElement>): void {
@@ -312,9 +343,14 @@ export function SocialGraph({ onSelectCreature, active = true }: Props) {
                   const cx = mx - (dy / len) * bow;
                   const cy = my + (dx / len) * bow;
                   const kind = edge.kind ?? "friend";
+                  const key = `${edge.a}-${edge.b}-${kind}`;
                   return (
                     <path
-                      key={`${edge.a}-${edge.b}-${kind}`}
+                      key={key}
+                      ref={(el) => {
+                        if (el) edgeElsRef.current.set(key, el);
+                        else edgeElsRef.current.delete(key);
+                      }}
                       d={`M${a.x},${a.y} Q${cx},${cy} ${b.x},${b.y}`}
                       fill="none"
                       stroke={EDGE_STROKE[kind]}
@@ -333,6 +369,10 @@ export function SocialGraph({ onSelectCreature, active = true }: Props) {
                 return (
                   <div
                     key={node.id}
+                    ref={(el) => {
+                      if (el) nodeElsRef.current.set(node.id, el);
+                      else nodeElsRef.current.delete(node.id);
+                    }}
                     role="button"
                     aria-label={node.name}
                     tabIndex={0}

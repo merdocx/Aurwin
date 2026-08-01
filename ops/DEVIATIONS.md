@@ -947,6 +947,8 @@ THIRD_LAND, MEDIUM_SEEDS, SMALL_BERGS. Именованные зоны — мя�
 3. **Light upsert без INSERT** — `persist.ts` режим `light` делает только
    batch UPDATE по `(id, pos_x, pos_y, zone, emotion, is_asleep, activity)`.
    Новорождённые попадают в БД через full snapshot или `persistGenesis`.
+   С 2026-08-01 hot path снова `light` каждый тик; `full` на
+   `snapshot_interval_ticks` и на тике с событием `birth`.
 
 4. **`movement.separation.max_nudge_units`** — потолок суммарного сдвига
    особи за одну итерацию separation; дополнение к существующим радиусам.

@@ -59,6 +59,21 @@ function creatureDto(row: LiveCreatureRow, currentTick: number, visualTickSecond
   };
 }
 
+/** Компактный отпечаток для sparse delta (без age_band — он редко нужен клиенту между снапшотами). */
+function creatureFingerprint(row: LiveCreatureRow): string {
+  const e = row.emotion ?? { valence: 0, arousal: 0 };
+  return [
+    row.pos_x.toFixed(1),
+    row.pos_y.toFixed(1),
+    row.zone ?? "",
+    row.is_asleep ? "1" : "0",
+    row.activity ?? "",
+    Number(e.valence).toFixed(2),
+    Number(e.arousal).toFixed(2),
+    row.name,
+  ].join("|");
+}
+
 class GatewayHub {
   private readonly clients = new Set<ClientState>();
   private readonly limiter: WsConnectionLimiter;
@@ -67,6 +82,9 @@ class GatewayHub {
   private idleTimer?: NodeJS.Timeout;
   private broadcastTimer?: NodeJS.Timeout;
   private listenClient?: Client;
+  /** Последние отпечатки существ — sparse delta шлёт только изменившихся. */
+  private lastFingerprints = new Map<string, string>();
+  private sparseTickCounter = 0;
 
   constructor(
     private readonly pool: Pool,
@@ -255,7 +273,21 @@ class GatewayHub {
         payload: e.payload,
       }));
 
-      const creatureDtos = creatures.map((c) => creatureDto(c, clock.tick, this.constants.time.visual_tick_seconds));
+      // Полный roster каждые 15 тиков + при смене набора id; иначе только изменившиеся.
+      this.sparseTickCounter += 1;
+      const forceFull = this.sparseTickCounter >= 15 || this.lastFingerprints.size !== creatures.length;
+      if (forceFull) this.sparseTickCounter = 0;
+
+      const nextFingerprints = new Map<string, string>();
+      const changed: LiveCreatureRow[] = [];
+      for (const c of creatures) {
+        const fp = creatureFingerprint(c);
+        nextFingerprints.set(c.id, fp);
+        if (forceFull || this.lastFingerprints.get(c.id) !== fp) changed.push(c);
+      }
+      this.lastFingerprints = nextFingerprints;
+
+      const creatureDtos = changed.map((c) => creatureDto(c, clock.tick, this.constants.time.visual_tick_seconds));
       const payload = JSON.stringify({
         type: "delta",
         tick: clock.tick,

@@ -120,10 +120,10 @@ async function persistTick(): Promise<void> {
   const alive = sim.aliveCreatures();
   const phase = sim.world.dayNight.phase();
   const isFullSnapshot = sim.currentTick % snapshot_interval_ticks === 0;
+  // Light UPDATE не INSERT'ит новорождённых — на тике birth нужен full.
+  const needsInsert = events.some((e) => e.type === "birth");
 
-  // Light UPDATE не INSERT'ит новорождённых → FK на decision_log/episodes.
-  // После масштаба ÷2 (N≈20–60) full upsert каждый тик приемлем.
-  await upsertCreatures(pool, alive, "full");
+  await upsertCreatures(pool, alive, isFullSnapshot || needsInsert ? "full" : "light");
   if (deaths.length > 0) await applyDeaths(pool, deaths);
   if (events.length > 0) await insertWorldEvents(pool, events);
   if (episodes.length > 0) await insertEpisodes(pool, episodes);
