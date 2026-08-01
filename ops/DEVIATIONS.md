@@ -995,3 +995,27 @@ THIRD_LAND, MEDIUM_SEEDS, SMALL_BERGS. Именованные зоны — мя�
 10. **Facing / PanZoom** transform только императивно (как позиция спрайтов).
 11. **CSP** разрешает Google Fonts; Dialog/Tabs a11y; README синхронизирован
     с фазой 7.
+
+## 2026-08-01 — living world: инстинкты + обучение + баланс охоты
+
+### Карта слоёв (физика / priors / скрипты / learn)
+
+| Слой | Что | Где |
+|------|-----|-----|
+| Физика | контакт, кубик P(kill), суша недоступна касатке, sleep-affordances | `actions.ts`, `landMask`, hunting.* |
+| Инстинкты (priors) | `instincts.*` yaml → `creature.instincts`; threat/value к видам, hunger drive, mediumBias | `instincts.ts`, genesis/birth |
+| Не скрипт действия | U(a) из innate×traits×habits×threat×episodes; flee → safetyScore zone | `utilityAI.ts` |
+| Обучение / inherit | habits EMA, zone_threat slow decay, culture_inherit↑, aversion/threat seed детям | `skillsHabits`, `reproduction`, `perception` |
+
+### Отклонения / решения
+
+1. **Снова P(kill\|contact) кубик** (`base_hunt_success_probability: 0.45`) —
+   откат always-kill UX ради живой популяции; pre_contact notice/break
+   сохранены. События: `flee_committed`, `approach_broken`, `hunt_miss`.
+2. **`instincts` JSONB** (migration 019) — не в А.2; нужен для priors после
+   рестарта. При NULL на restore — re-seed из yaml.
+3. **ZONE_RISK таблица убрана** из авторитета U; safetyScore =
+   habits − zone_threat + mediumBias.
+4. **zone_threat_decay** 0.15→`memory.zone_threat_decay_per_tick: 0.04`.
+5. Имена моторов (`flee`/`hunt`/…) сохранены для совместимости
+   movement/activity; смысл — оценка через priors+обучение, не if→action.

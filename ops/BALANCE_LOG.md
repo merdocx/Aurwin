@@ -359,7 +359,31 @@ API/UI: рёбра графа friend / mate / kin разными цветами.
 | Параметр | Значение |
 |----------|----------|
 | shore_clearance orca | **27** (L=84 map) |
-| shore_clearance penguin_water | **15** (L=48 map) |
+| shore_clearance penguin_water | **10** (L=32 map; было 15 при L=48) |
 
 Sim: `clearFootprintFromLand` для orca всегда и penguin в воде.
 FE: якорь воды = центр тела (не нос).
+
+## 2026-08-01 — меньше плавающие пингвины
+
+Water penguin sprite **48×38 → 32×26**; shore_clearance penguin_water **15 → 10**.
+
+## 2026-08-01 — living world: hunt physics + instincts
+
+Цель: остановить wipe (20→4 predation) без видовых if-сценариев; priors от рождения.
+
+| Параметр | Было | Стало |
+|----------|------|-------|
+| contact_radius_units | 38 | **22** |
+| base_hunt_success_probability | 1.0 (always) | **0.45** (кубик А.10) |
+| action_speed hunt / flee | 1.35 / 1.2 | **1.15 / 1.45** |
+| notice_in_advance_base_probability | 0.5 | **0.65** |
+| pre_contact.defense_nudge_units | 10 | **16** |
+| culture_inherit habit/skill/weights | 0.4 / 0.1 / 0.15 | **0.55 / 0.2 / 0.2** |
+| zone_threat_decay_per_tick | 0.15 hardcode | **0.04** yaml |
+
+Новое: `instincts.penguin/orca` (orca threat ~0.85 у пингвина; prey value у касатки);
+flee → `safetyScore` (лёд); события `flee_committed` / `approach_broken` / `hunt_miss`;
+метрики `aurwin_hunt_misses_total`, `aurwin_innate_decision_ratio`, …
+
+Genesis counts не трогали (п.9). Калибровка: offline `--days 1 --fast` + live scrape.

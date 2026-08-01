@@ -7,7 +7,17 @@ import { computeAuthority } from "./authority.js";
 import { ageStageFor } from "./lifecycle.js";
 import { ticksToInternalDays, ticksToRealDays } from "./time.js";
 import { ecoZoneAtSim } from "../world/landMask.js";
-import { SKILL_KEYS, type AgeStage, type Creature, type DecisionWeights, type Skills } from "./types.js";
+import { inheritInstincts } from "./instincts.js";
+import {
+  aversionKey,
+  SKILL_KEYS,
+  type AgeStage,
+  type AversionRecord,
+  type Creature,
+  type DecisionWeights,
+  type Skills,
+} from "./types.js";
+import type { ZoneName } from "../world/zones.js";
 
 /**
  * Запрет близкого инбридинга на глубину 2 поколений (7.4): не
@@ -134,6 +144,7 @@ export function createOffspring(
     ageStage: ageStageFor(species, 0),
     authority: 0,
     habits: inheritHabits(parentA, parentB, rng),
+    instincts: inheritInstincts(species, traits, parentA, parentB, rng),
     weights,
     weightsBirth: structuredClone(weights),
     lastReflectionAt: tick,
@@ -141,7 +152,7 @@ export function createOffspring(
     awakeSinceTick: tick,
     episodes: [],
     perceivedStates: new Map(),
-    perceivedZoneThreat: new Map(),
+    perceivedZoneThreat: inheritZoneThreat(parentA, parentB),
     trust: new Map(),
     cohortId: `${species}-d${Math.floor(ticksToRealDays(tick))}`,
     actionCounts: {},
@@ -149,4 +160,35 @@ export function createOffspring(
   };
   creature.authority = computeAuthority(creature, 0);
   return creature;
+}
+
+function inheritZoneThreat(parentA: Creature, parentB: Creature): Map<ZoneName, number> {
+  const { zone_threat_seed } = getSimConstants().reproduction.culture_inherit;
+  const out = new Map<ZoneName, number>();
+  const zones = new Set<ZoneName>([...parentA.perceivedZoneThreat.keys(), ...parentB.perceivedZoneThreat.keys()]);
+  for (const zone of zones) {
+    const mean = ((parentA.perceivedZoneThreat.get(zone) ?? 0) + (parentB.perceivedZoneThreat.get(zone) ?? 0)) / 2;
+    const seeded = mean * zone_threat_seed;
+    if (seeded >= 0.05) out.set(zone, clamp(seeded, 0, 1));
+  }
+  return out;
+}
+
+/** Seed aversion к объектам, которых избегают оба/один родитель (культурная память опасности). */
+export function inheritAversions(parentA: Creature, parentB: Creature, childId: string, aversions: Map<string, AversionRecord>): void {
+  const { aversion_seed } = getSimConstants().reproduction.culture_inherit;
+  const fromParent = (parent: Creature) => {
+    for (const [, rec] of aversions) {
+      if (rec.subjectId !== parent.id) continue;
+      const strength = rec.strength * aversion_seed;
+      if (strength < 0.05) continue;
+      const childKey = aversionKey(childId, rec.objectId);
+      const existing = aversions.get(childKey);
+      if (!existing || existing.strength < strength) {
+        aversions.set(childKey, { subjectId: childId, objectId: rec.objectId, strength: clamp(strength, 0, 1) });
+      }
+    }
+  };
+  fromParent(parentA);
+  fromParent(parentB);
 }

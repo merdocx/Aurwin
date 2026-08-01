@@ -15,6 +15,7 @@ import {
   type Species,
   type Vector2,
 } from "./types.js";
+import { seedInstincts } from "./instincts.js";
 
 function randomSkills(rng: Rng): Skills {
   const max = getSimConstants().skills.genesis_initial_max;
@@ -104,6 +105,7 @@ export function createGenesisCreature(species: Species, sex: Sex, opts: GenesisO
     ageStage: ageStageFor(species, ageWeeks),
     authority: 0,
     habits: {},
+    instincts: seedInstincts(species, traits, rng),
     weights,
     weightsBirth: structuredClone(weights),
     lastReflectionAt: tick,

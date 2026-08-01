@@ -1,4 +1,6 @@
 import { defaultWeights } from "../src/sim/genesis.js";
+import { seedInstincts } from "../src/sim/instincts.js";
+import { Rng } from "../src/sim/rng.js";
 import type { Creature, Sex, Species, Traits } from "../src/sim/types.js";
 
 let counter = 0;
@@ -16,6 +18,7 @@ export function makeTestCreature(overrides: Partial<Creature> = {}): Creature {
     expressiveness: 0,
   };
   const weights = overrides.weights ?? defaultWeights(species);
+  const instincts = overrides.instincts ?? seedInstincts(species, traits, new Rng(counter + 17));
 
   const base: Creature = {
     id: `test-${counter}`,
@@ -37,6 +40,7 @@ export function makeTestCreature(overrides: Partial<Creature> = {}): Creature {
     ageStage: "adult",
     authority: 0,
     habits: {},
+    instincts,
     weights,
     weightsBirth: structuredClone(weights),
     lastReflectionAt: 0,
@@ -51,5 +55,5 @@ export function makeTestCreature(overrides: Partial<Creature> = {}): Creature {
     narrativeFacts: [],
   };
 
-  return { ...base, ...overrides };
+  return { ...base, ...overrides, instincts: overrides.instincts ?? instincts };
 }

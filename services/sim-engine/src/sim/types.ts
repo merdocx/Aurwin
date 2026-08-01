@@ -52,6 +52,28 @@ export const SKILL_KEYS = ["foraging", "evasion", "socializing", "hunting", "par
 /** Личная карта ожиданий по зонам (7.7, механизм 2): zone -> -1..1. */
 export type Habits = Partial<Record<ZoneName, number>>;
 
+/** Врождённый affect к виду: threat = опасность, value = пища/социальная ценность. */
+export interface SpeciesAffect {
+  threat: number;
+  value: number;
+}
+
+/**
+ * Базовые инстинкты от рождения (priors): как сильно чувствовать стимулы.
+ * Не сценарий действий — стратегия из U(a) × обучение поверх.
+ */
+export interface Instincts {
+  speciesAffect: Partial<Record<Species, SpeciesAffect>>;
+  needDrive: {
+    hungerSeekFood: number;
+    hungerSeekPrey: number;
+  };
+  mediumBias: {
+    land: number;
+    water: number;
+  };
+}
+
 export interface NeedWeights {
   hunger: number;
   energy: number;
@@ -228,6 +250,8 @@ export interface Creature {
   ageStage: AgeStage;
   authority: number; // 0..1
   habits: Habits;
+  /** Врождённые priors вида (+ mild parent overlay у newborn). */
+  instincts: Instincts;
   weights: DecisionWeights;
   weightsBirth: DecisionWeights;
   lastReflectionAt: number;

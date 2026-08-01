@@ -1,8 +1,8 @@
 /**
  * Статичный SVG-фон карты (порт /tmp/aurwin-ds/ui_kits/observatory/WorldScene.jsx):
- * градиенты моря/льда, текстура воды, континенты, айсберги, снежная крошка, блики.
- * Компонент не принимает динамических пропсов — тема переключается через
- * CSS-переменные (data-theme на предке .observatory).
+ * градиенты моря/льда, текстура воды, континенты, айсберги, снежная крошка.
+ * Белый/лёд только на геометрии hit-теста (continents = landMask); вода — teal.
+ * Тема — CSS-переменные (data-theme на предке .observatory).
  */
 import {
   MAIN_LAND,
@@ -40,11 +40,11 @@ function ringPath(land: typeof MAIN_LAND, off: number, step: number): string {
   return d + "Z";
 }
 
-function archPath(s: IslandSeed, wob: (a: number) => number): string {
-  // Круг ≈ hit-тест isLandMap (r * 1.15); лёгкий wobble без Y-squash.
+/** Круг ровно r×1.15 — совпадает с isLandMap / landMask (без wobble). */
+function mediumIslandPath(s: IslandSeed): string {
+  const r = s.r * 1.15;
   const pts = seq(24, (i) => {
     const a = (i / 24) * Math.PI * 2;
-    const r = s.r * 1.15 * (1 + wob(a));
     return `${s.cx + Math.cos(a) * r},${s.cy + Math.sin(a) * r}`;
   });
   return "M" + pts.join(" L") + " Z";
@@ -105,40 +105,46 @@ export function WorldMapSvg() {
       <rect x={0} y={0} width={MAP_W} height={MAP_H} fill="url(#waterTexture)" />
       <rect x={0} y={0} width={MAP_W} height={MAP_H} fill="url(#sunGlow)" />
 
+      {/* Мелководье — teal, не лёд (вне маски земли). */}
       {[70, 160, 280].map((off, i) => (
-        <path key={"depth" + i} d={ringPath(MAIN_LAND, off, 0.15)} style={{ fill: "var(--ice-300)", opacity: 0.16 - i * 0.045 }} />
+        <path key={"depth" + i} d={ringPath(MAIN_LAND, off, 0.15)} style={{ fill: "var(--navy-700)", opacity: 0.14 - i * 0.035 }} />
       ))}
       {[60, 140, 240].map((off, i) => (
-        <path key={"fdepth" + i} d={ringPath(FAR_ICE, off, 0.18)} style={{ fill: "var(--ice-300)", opacity: 0.15 - i * 0.04 }} />
+        <path key={"fdepth" + i} d={ringPath(FAR_ICE, off, 0.18)} style={{ fill: "var(--navy-700)", opacity: 0.12 - i * 0.03 }} />
       ))}
       {[60, 140, 240].map((off, i) => (
-        <path key={"tdepth" + i} d={ringPath(THIRD_LAND, off, 0.18)} style={{ fill: "var(--ice-300)", opacity: 0.15 - i * 0.04 }} />
+        <path key={"tdepth" + i} d={ringPath(THIRD_LAND, off, 0.18)} style={{ fill: "var(--navy-700)", opacity: 0.12 - i * 0.03 }} />
       ))}
 
+      {/* Блики воды — не белые «льдинки». */}
       {SPARKLES.map((s, i) => (
-        <Sparkle key={"spw" + i} x={s.x} y={s.y} s={s.s} o={0.45} />
+        <Sparkle key={"spw" + i} x={s.x} y={s.y} s={s.s} color="var(--aurora-teal-500)" o={0.18} />
       ))}
 
+      {/* NW скала без снежных пятен (скала ≠ лёд). */}
       <path
         d="M0,0 L220,0 C244,44 202,82 148,69 C102,58 64,98 20,74 C0,62 0,27 0,0 Z"
         style={{ fill: "url(#rockGrad)" }}
         filter="url(#coastShadow)"
       />
-      {seq(2, (i) => (
-        <ellipse key={"rocksnow" + i} cx={40 + i * 85} cy={18 + i * 14} rx={28} ry={15} style={{ fill: "var(--neutral-0)", opacity: 0.5 }} />
-      ))}
 
       {SMALL_BERGS.map((b, i) => (
         <g key={"sberg" + i}>
           <ellipse cx={b.x} cy={b.y + b.r * 0.5} rx={b.r * 1.2} ry={b.r * 0.35} style={{ fill: "var(--aurora-teal-500)", opacity: 0.22 }} />
-          <ellipse cx={b.x} cy={b.y} rx={b.r} ry={b.r * 0.72} style={{ fill: "url(#iceGlow)", stroke: "var(--ice-400)", strokeWidth: 1.6 }} />
+          <ellipse
+            cx={b.x}
+            cy={b.y}
+            rx={b.r}
+            ry={b.r * 0.72}
+            style={{ fill: "url(#iceGlow)", stroke: "var(--ice-400)", strokeWidth: 2.2 }}
+          />
         </g>
       ))}
 
       {MEDIUM_SEEDS.map((s, i) => (
         <g key={"med" + i}>
           <path
-            d={archPath(s, (a) => 0.12 * Math.sin(3 * a + i) + 0.08 * Math.sin(5 * a - i))}
+            d={mediumIslandPath(s)}
             style={{ fill: "url(#iceGlow)", stroke: "var(--ice-400)", strokeWidth: 2.5, strokeLinejoin: "round" }}
           />
           <polygon

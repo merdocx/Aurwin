@@ -40,8 +40,8 @@ const HIT_R = {
 
 /** Длина top-down арта (px); пропорции PNG (нос влево). */
 const SPRITE = {
-  // penguin.png 512×410 → ~1.25
-  penguin: { w: 48, h: 38 },
+  // penguin.png 512×410 → ~1.25; компактнее, ближе к body diameter 32.
+  penguin: { w: 32, h: 26 },
   // orca.png 512×263 → ~1.95; в пределах диаметра body_radius (~90px)
   orca: { w: 84, h: 43 },
 } as const;

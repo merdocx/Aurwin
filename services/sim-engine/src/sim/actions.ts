@@ -165,11 +165,13 @@ export function resolveMovement(
 
   let desiredDir: Vector2 | undefined;
   let steeringAsWander = action === "wander";
-  if (targetPos && (MOVING_ACTIONS_WITH_CREATURE_TARGET.has(action) || action === "goto_food")) {
+  if (targetPos && (MOVING_ACTIONS_WITH_CREATURE_TARGET.has(action) || action === "goto_food" || (action === "flee" && zone))) {
     const dx = targetPos.x - creature.pos.x;
     const dy = targetPos.y - creature.pos.y;
     const mag = Math.hypot(dx, dy) || 1;
-    desiredDir = action === "flee" ? { x: -dx / mag, y: -dy / mag } : { x: dx / mag, y: dy / mag };
+    // flee к убежищу (лёд): идём К зоне; иначе — ОТ цели (orca).
+    const towardRefuge = action === "flee" && zone && (zone === "main_ice" || zone === "far_ice");
+    desiredDir = action === "flee" && !towardRefuge ? { x: -dx / mag, y: -dy / mag } : { x: dx / mag, y: dy / mag };
   } else if (action === "wander") {
     desiredDir = pickWanderDir(creature, rng, steering);
   }
@@ -187,7 +189,7 @@ export function resolveMovement(
     creature.heading = heading;
   }
 
-  if (targetPos && action !== "flee" && !steeringAsWander) {
+  if (targetPos && !(action === "flee" && !(zone && (zone === "main_ice" || zone === "far_ice"))) && !steeringAsWander) {
     const dist = Math.hypot(targetPos.x - creature.pos.x, targetPos.y - creature.pos.y);
     if (dist < steering.arrival_slow_radius_units) {
       // Essentially arrived: keep moving via wander rather than crawling to a stop.
@@ -223,6 +225,10 @@ export function resolveMovement(
 
 /** goto_food/flee/approach/court/hunt/stealth_approach/coordinate_hunt — целевая точка движения. */
 export function movementTargetPos(action: string, zone: ZoneName | undefined, target: Creature | undefined): Vector2 | undefined {
+  // flee к зоне-убежищу (лёд), если AI выбрал safety zone — не только «от orca».
+  if (action === "flee" && zone && (zone === "main_ice" || zone === "far_ice")) {
+    return zoneCenter(zone);
+  }
   if (MOVING_ACTIONS_WITH_CREATURE_TARGET.has(action)) return target?.pos;
   if (action === "goto_food" && zone) return zoneCenter(zone);
   return undefined;
@@ -267,14 +273,40 @@ export interface HuntConditions {
 }
 
 /**
- * Касание при охоте = смерть (UX 2026-08-01). Удача А.10 живёт в pre_contact
- * (срыв/flee); здесь всегда caught=true. noticedInAdvance — для сигналов/логов.
+ * Вероятностная охота при контакте (А.10) + notice для сигналов/логов.
+ * Living-world 2026-08-01: снова кубик (не always-kill).
  */
 export function resolveHunt(orca: Creature, prey: Creature, conditions: HuntConditions, currentTick: number, rng: Rng): HuntOutcome {
-  void conditions;
+  const constants = getSimConstants();
+  const h = constants.hunting;
+  const skillConf = constants.skills.outcome_multiplier;
+  const preyAgeStage = ageStageFor(prey.species, ageWeeksAt(prey.bornAtTick, currentTick));
+  const orcaAgeStage = ageStageFor(orca.species, ageWeeksAt(orca.bornAtTick, currentTick));
+
   const noticedInAdvance = rollHuntNotice(orca, prey, currentTick, rng);
-  orca.needs.hunger = clamp(orca.needs.hunger - getSimConstants().hunting.hunger_reduction_per_kill, 0, 1);
-  return { caught: true, noticedInAdvance, successProbability: 1 };
+
+  let p = constants.world.base_hunt_success_probability;
+  if (preyAgeStage === "juvenile") p *= h.juvenile_prey_multiplier;
+  if (preyAgeStage === "old") p *= h.old_prey_multiplier;
+  if (conditions.groupProtected) {
+    p *= conditions.coordinated
+      ? constants.kinship.coordinate_hunt.group_defense_multiplier_with_coordination
+      : constants.kinship.coordinate_hunt.group_defense_multiplier_without_coordination;
+  }
+  if (noticedInAdvance) p *= h.noticed_in_advance_multiplier;
+  if (orca.needs.hunger >= h.hungry_hunter_hunger_threshold) p *= h.hungry_hunter_multiplier;
+  if (conditions.guarded) p *= constants.kinship.guard_offspring.offspring_hunt_success_multiplier;
+
+  let skillMult = skillConf.base + skillConf.skill_weight * orca.skills.hunting;
+  skillMult *= fatigueSkillMultiplier(orca);
+  if (orcaAgeStage === "juvenile") skillMult *= constants.life_stages.juvenile_self_feeding_efficiency;
+
+  const successProbability = clamp(p * skillMult, 0, 1);
+  const caught = rng.bool(successProbability);
+  if (caught) {
+    orca.needs.hunger = clamp(orca.needs.hunger - h.hunger_reduction_per_kill, 0, 1);
+  }
+  return { caught, noticedInAdvance, successProbability };
 }
 
 /** P(заметил заранее) — evasion × threat; до контакта → commit flee. */

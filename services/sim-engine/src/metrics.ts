@@ -160,6 +160,36 @@ const coordinatedHunts = new client.Gauge({
   registers: [register],
 });
 
+const huntMisses = new client.Gauge({
+  name: "aurwin_hunt_misses_total",
+  help: "Промахи охоты (контакт без kill + срывы сближения)",
+  registers: [register],
+});
+
+const fleeCommitted = new client.Gauge({
+  name: "aurwin_flee_committed_total",
+  help: "Commit flee по notice_in_advance",
+  registers: [register],
+});
+
+const approachBroken = new client.Gauge({
+  name: "aurwin_approach_broken_total",
+  help: "Срывы сближения (group/guard pre_contact)",
+  registers: [register],
+});
+
+const reachedHighSafety = new client.Gauge({
+  name: "aurwin_reached_high_safety_total",
+  help: "Выживание жертвы на суше (обучение убежищу)",
+  registers: [register],
+});
+
+const innateDecisionRatio = new client.Gauge({
+  name: "aurwin_innate_decision_ratio",
+  help: "Доля решений с явным вкладом innate в breakdown выбранного действия",
+  registers: [register],
+});
+
 const SPECIES: Species[] = ["penguin", "orca"];
 
 function meanStddev(values: number[]): { mean: number; stddev: number } {
@@ -281,6 +311,11 @@ export function setPopulationGauges(sim: Simulation): void {
   guardEpisodes.set(sim.acc.guardEpisodes);
   provisionEpisodes.set(sim.acc.provisionEpisodes);
   coordinatedHunts.set(sim.acc.coordinatedHunts);
+  huntMisses.set(sim.acc.huntMisses);
+  fleeCommitted.set(sim.acc.fleeCommitted);
+  approachBroken.set(sim.acc.approachBroken);
+  reachedHighSafety.set(sim.acc.reachedHighSafety);
+  innateDecisionRatio.set(sim.acc.decisionsTotal > 0 ? sim.acc.decisionsWithInnate / sim.acc.decisionsTotal : 0);
 }
 
 /** Экспортирован для тестов (services/sim-engine/tests/metrics.test.ts) — не используется в проде за пределами этого модуля. */

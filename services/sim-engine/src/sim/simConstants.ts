@@ -48,6 +48,7 @@ export interface SimConstants {
     episodic_limit: { penguin: number; orca: number };
     significance_decay_per_day: { penguin: number; orca: number };
     core_memory_significance_threshold: number;
+    zone_threat_decay_per_tick: number;
   };
   utility_ai: {
     noise_epsilon_max: number;
@@ -172,6 +173,9 @@ export interface SimConstants {
       habit_noise_amplitude: number;
       weights_blend: number;
       skill_seed: number;
+      instinct_parent_overlay: number;
+      zone_threat_seed: number;
+      aversion_seed: number;
     };
   };
   foraging: {
@@ -206,6 +210,18 @@ export interface SimConstants {
     hunger_reduction_per_kill: number;
     provision_base_success_probability: number;
     provision_hunger_reduction: number;
+  };
+  instincts: {
+    penguin: {
+      species_affect: Record<string, { threat: number; value: number }>;
+      need_drive: { hunger_seek_food: number; hunger_seek_prey: number };
+      medium_bias: { land: number; water: number };
+    };
+    orca: {
+      species_affect: Record<string, { threat: number; value: number }>;
+      need_drive: { hunger_seek_food: number; hunger_seek_prey: number };
+      medium_bias: { land: number; water: number };
+    };
   };
   episode_significance: Record<string, number>;
   authority: {

@@ -5,6 +5,7 @@ import { getSimConstants } from "./simConstants.js";
 import { ageStageFor, ageWeeksAt } from "./lifecycle.js";
 import { trueVigor } from "./vigor.js";
 import { applyEmotionDelta, EMOTION_DELTAS } from "./emotion.js";
+import { innateSpeciesThreat } from "./instincts.js";
 import type { Creature } from "./types.js";
 
 /**
@@ -54,10 +55,12 @@ export function sense(
     if (!observer.perceivedStates.has(subject.id)) {
       const ageStage = ageStageFor(subject.species, ageWeeksAt(subject.bornAtTick, currentTick));
       const noise = rng.gaussian(0, 0.08);
-      const isPredator = observer.species === "penguin" && subject.species === "orca";
+      const innateThreat = innateSpeciesThreat(observer, subject.species);
+      const isPredator = innateThreat > 0.2;
+      const startThreat = isPredator ? Math.max(baselineThreat, innateThreat) : innateThreat;
       observer.perceivedStates.set(subject.id, {
         perceivedVigor: clamp(trueVigor(subject, ageStage) + noise, 0, 1),
-        perceivedThreat: isPredator ? baselineThreat : 0,
+        perceivedThreat: startThreat,
         lastSignalTick: -Infinity,
       });
       if (isPredator) {
@@ -114,7 +117,7 @@ export function decayPerceivedStates(
     }
   }
 
-  const zoneDecayRate = 0.15; // А.2: "затухание 15%/тик - быстрее, чем у perceived_states"
+  const zoneDecayRate = getSimConstants().memory.zone_threat_decay_per_tick;
   for (const [zone, threat] of observer.perceivedZoneThreat) {
     const next = threat * (1 - zoneDecayRate);
     if (next < 0.01) {

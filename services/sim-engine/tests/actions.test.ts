@@ -5,18 +5,31 @@ import { FishField } from "../src/world/fish.js";
 import { getSimConstants } from "../src/sim/simConstants.js";
 import { makeTestCreature } from "./testCreature.js";
 
-describe("resolveHunt (касание = смерть)", () => {
-  it("при контакте всегда caught=true и снижает голод", () => {
-    const orca = makeTestCreature({
-      species: "orca",
-      needs: { hunger: 1, energy: 0.8, social: 0.2, sleep_pressure: 0.1 },
-      skills: { foraging: 0, evasion: 0, socializing: 0, hunting: 0.1, parenting: 0 },
-    });
-    const prey = makeTestCreature({ bornAtTick: 0 });
-    const outcome = resolveHunt(orca, prey, { guarded: true, coordinated: false, groupProtected: true }, 100, new Rng(1));
-    expect(outcome.caught).toBe(true);
-    expect(outcome.successProbability).toBe(1);
-    expect(orca.needs.hunger).toBeLessThan(1);
+describe("resolveHunt (вероятностный контакт)", () => {
+  it("P(kill|contact) использует base_hunt_success_probability и не всегда 1", () => {
+    const base = getSimConstants().world.base_hunt_success_probability;
+    expect(base).toBeLessThan(1);
+    expect(base).toBeGreaterThan(0);
+
+    let caught = 0;
+    const n = 400;
+    for (let i = 0; i < n; i++) {
+      const orca = makeTestCreature({
+        species: "orca",
+        needs: { hunger: 1, energy: 0.8, social: 0.2, sleep_pressure: 0.1 },
+        skills: { foraging: 0, evasion: 0, socializing: 0, hunting: 0.1, parenting: 0 },
+      });
+      const prey = makeTestCreature({ bornAtTick: 0 });
+      const outcome = resolveHunt(orca, prey, { guarded: false, coordinated: false, groupProtected: false }, 100, new Rng(i + 1));
+      if (outcome.caught) {
+        caught++;
+        expect(orca.needs.hunger).toBeLessThan(1);
+      }
+      expect(outcome.successProbability).toBeGreaterThan(0);
+      expect(outcome.successProbability).toBeLessThanOrEqual(1);
+    }
+    expect(caught).toBeGreaterThan(0);
+    expect(caught).toBeLessThan(n);
   });
 
   it("rollHuntNotice выше при высоком evasion и threat", () => {

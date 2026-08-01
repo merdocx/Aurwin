@@ -28,3 +28,22 @@ export function updateHabit(creature: Creature, zone: ZoneName, outcome: number)
   const current = creature.habits[zone] ?? 0;
   creature.habits[zone] = clamp(current + alpha * (outcome - current), -1, 1);
 }
+
+/** Социальный share habit/threat после травмы (свидетели + друзья). */
+export function shareHabitThreat(
+  source: Creature,
+  learners: Creature[],
+  zone: ZoneName,
+  habitOutcome: number,
+  threatLevel: number,
+): void {
+  const { witness_multiplier } = getSimConstants().skills.social_learning;
+  for (const learner of learners) {
+    if (learner.id === source.id) continue;
+    updateHabit(learner, zone, habitOutcome * witness_multiplier);
+    if (threatLevel > 0) {
+      const cur = learner.perceivedZoneThreat.get(zone) ?? 0;
+      learner.perceivedZoneThreat.set(zone, clamp(Math.max(cur, threatLevel * witness_multiplier), 0, 1));
+    }
+  }
+}

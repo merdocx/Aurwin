@@ -1,4 +1,4 @@
-import { clamp, type Rng } from "./rng.js";
+import { type Rng } from "./rng.js";
 import { getSimConstants } from "./simConstants.js";
 import { ageStageFor, ageWeeksAt } from "./lifecycle.js";
 import { isForbiddenPair } from "./reproduction.js";
@@ -7,46 +7,15 @@ import { attractiveness, distance, normalizedDistance } from "./huntingAttractiv
 import { visionRange } from "./perception.js";
 import type { Phase } from "../world/dayNight.js";
 import { type ZoneName } from "../world/zones.js";
-import { isLandSim, mediumAtSim } from "../world/landMask.js";
+import { isLandSim } from "../world/landMask.js";
+import {
+  bestSafetyZone,
+  episodeActionBias,
+  innateSpeciesThreat,
+  innateSpeciesValue,
+  safetyScore,
+} from "./instincts.js";
 import type { AgeStage, Creature, DecisionFactor, Traits } from "./types.js";
-
-/**
- * "Опасность"/благоприятность зон — качественная характеристика из текста
- * А.10 ("north_bay — рискованное изобилие", "south_shallows — безопасная
- * бедность", "open_water — для пингвинов опасна"), не выписанная числом
- * нигде в ТЗ. Кодируется здесь как эвристика поведения (не как "константа
- * симуляции" А.9 — влияет только на то, КАК caution/courage модулируют
- * выбор зоны, а не на баланс экосистемы), симметрично для обоих видов:
- * для касатки риск зон почти не имеет смысла (у неё нет естественных
- * хищников), поэтому термин используется только в решениях пингвина.
- */
-const ZONE_RISK: Partial<Record<ZoneName, number>> = {
-  north_bay: 0.6,
-  south_shallows: 0.2,
-  main_ice: 0.1,
-  far_ice: 0.05,
-  open_water: 0.85,
-};
-
-function zoneRisk(zone: ZoneName): number {
-  return ZONE_RISK[zone] ?? 0.3;
-}
-
-function zoneAtPos(creature: Creature) {
-  // medium — от маски земли; имя зоны — мягкий eco-ярлык на creature.zone.
-  return { name: creature.zone as ZoneName, type: mediumAtSim(creature.pos.x, creature.pos.y) };
-}
-
-/**
- * Касатка физически не может преследовать пингвина на льду (нет среды
- * передвижения — `world/movement.ts` бросает исключение для касатки на
- * льду). Пингвин на льду в принципе вне досягаемости хищника, поэтому цели
- * для hunt/stealth_approach/coordinate_hunt ограничены водными зонами.
- */
-function isWaterZone(zone: ZoneName): boolean {
-  // Кормовые/охотничьи цели — водные эко-регионы (не полосы).
-  return zone === "north_bay" || zone === "south_shallows" || zone === "open_water";
-}
 
 export interface DecideContext {
   creature: Creature;
@@ -151,27 +120,10 @@ function finalize(name: string, zone: ZoneName | undefined, targetId: string | u
   return { name, zone, targetId, utility, breakdown };
 }
 
-/** Ближайший сосед данного вида среди видимых (кроме себя). */
-function nearestOfSpecies(creature: Creature, visible: Creature[], species: Creature["species"]): Creature | undefined {
-  let best: Creature | undefined;
-  let bestDist = Infinity;
-  for (const other of visible) {
-    if (other.species !== species) continue;
-    const d = distance(creature.pos, other.pos);
-    if (d < bestDist) {
-      bestDist = d;
-      best = other;
-    }
-  }
-  return best;
-}
-
 /**
- * Utility AI уровня 1 (А.4): для каждого доступного действия считает
- * U(a) = Σ w_need·f + Σ w_trait·g + w_skill·skill(a) + w_habit·habit(zone) +
- * emotion_mod(a) + intention_bonus(a) + ε, выбирает argmax. Шум ε строго
- * меньше типичного вклада черт (проверяется тестом utilityAI.test.ts) —
- * иначе решения перестанут быть атрибутируемы чертам/памяти (цель 2).
+ * Utility AI уровня 1 (А.4): U(a) из needs × traits × skills × habits ×
+ * instincts × threat × episodes + ε. Кандидаты — моторы (flee/hunt/…);
+ * видовые if не диктуют действие, а открывают стимулы для оценки.
  */
 export function decide(ctx: DecideContext): Decision {
   const { creature, currentTick, phase, visible, fishAvailability, bondStrength, aversionStrength, rng } = ctx;
@@ -183,14 +135,15 @@ export function decide(ctx: DecideContext): Decision {
 
   const candidates: Candidate[] = [];
 
-  // wander — движимо любопытством; при высоком голоде ослабляется (пингвин).
   {
     const wanderBreakdown: Record<string, number> = {
       baseline: 0.08,
       trait: traitTerm(creature, (t) => t.curiosity * 0.3),
       habit: habitTerm(creature, creature.zone),
+      safety: safetyScore(creature, creature.zone) * 0.05,
       emotion: playfulTerm(creature) * 0.1,
       intention: intentionTerm(creature, "wander", creature.zone, undefined, false),
+      episode: episodeActionBias(creature, "wander", creature.zone, undefined),
     };
     if (creature.species === "penguin" && creature.needs.hunger > 0.55) {
       wanderBreakdown.hunger_penalty = -(creature.needs.hunger - 0.55) * 0.5;
@@ -198,8 +151,7 @@ export function decide(ctx: DecideContext): Decision {
     candidates.push(finalize("wander", creature.zone, undefined, wanderBreakdown, rng, noiseMax));
   }
 
-  // sleep — давление сна + хронотип/сутки (7.10).
-  // Пингвин спит только на земле (маска DS).
+  // Sleep: affordance тела (пингвин — только суша); не «выученный скрипт».
   const canSleep = creature.species !== "penguin" || isLandSim(creature.pos.x, creature.pos.y);
   if (canSleep) {
     candidates.push(
@@ -211,6 +163,7 @@ export function decide(ctx: DecideContext): Decision {
           need: needTerm(creature, { sleep: creature.needs.sleep_pressure, energy: 1 - creature.needs.energy }),
           chronotype: sleepUtilityBias(creature, isNight),
           habit: habitTerm(creature, creature.zone) * 0.5,
+          safety: safetyScore(creature, creature.zone) * 0.08,
         },
         rng,
         noiseMax,
@@ -275,18 +228,15 @@ function decidePenguinActions(
   const { creature, visible, fishAvailability, bondStrength, aversionStrength, rng, currentTick, phase } = ctx;
   const constants = getSimConstants();
   const feedingZones = Object.keys(constants.world.fish_respawn_per_tick) as ZoneName[];
-  const hungerBoost = creature.needs.hunger * 0.4;
+  const hungerDrive = creature.instincts.needDrive.hungerSeekFood;
+  const hungerBoost = creature.needs.hunger * hungerDrive * 0.7;
 
-  // goto_food: лучшая по (доступность рыбы + личная привычка - осторожность*риск - воспринятая угроза зоны) кормовая зона.
   let bestFeedingZone: ZoneName = feedingZones[0];
   let bestFeedingScore = -Infinity;
   for (const zone of feedingZones) {
-    const perceivedThreat = creature.perceivedZoneThreat.get(zone) ?? 0;
     const score =
-      fishAvailability(zone) * 0.6 +
-      (creature.habits[zone] ?? 0) * 0.3 -
-      creature.traits.caution * zoneRisk(zone) * 0.4 -
-      perceivedThreat * 0.5 +
+      fishAvailability(zone) * 0.55 +
+      safetyScore(creature, zone) * 0.45 +
       intentionTerm(creature, "goto_food", zone, undefined, false);
     if (score > bestFeedingScore) {
       bestFeedingScore = score;
@@ -303,11 +253,13 @@ function decidePenguinActions(
         {
           need: needTerm(creature, { hunger: creature.needs.hunger }),
           hunger_boost: hungerBoost,
+          innate_drive: hungerDrive * creature.needs.hunger * 0.25,
           skill: skillTerm(creature, creature.skills.foraging),
           habit: habitTerm(creature, bestFeedingZone),
-          trait: traitTerm(creature, (t) => t.courage * zoneRisk(bestFeedingZone) * 0.3 - t.caution * zoneRisk(bestFeedingZone) * 0.3),
+          safety: safetyScore(creature, bestFeedingZone) * 0.35,
           threat: -zoneThreat * 0.4,
           intention: intentionTerm(creature, "goto_food", bestFeedingZone, undefined, false),
+          episode: episodeActionBias(creature, "goto_food", bestFeedingZone, undefined),
         },
         rng,
         noiseMax,
@@ -315,18 +267,21 @@ function decidePenguinActions(
     );
   }
 
-  // Пингвин на воде с высоким давлением сна — стремится к льду (main_ice).
+  // Высокое давление сна на воде → движение к выученной безопасности (не hardcode main_ice).
   const onWater = !isLandSim(creature.pos.x, creature.pos.y);
   if (onWater && creature.needs.sleep_pressure > constants.day_night.fatigue_penalty.sleep_pressure_threshold) {
+    const refuge = bestSafetyZone(creature, true);
     candidates.push(
       finalize(
         "goto_food",
-        "main_ice",
+        refuge,
         undefined,
         {
           need: needTerm(creature, { sleep: creature.needs.sleep_pressure }),
-          habit: habitTerm(creature, "main_ice"),
+          habit: habitTerm(creature, refuge),
+          safety: safetyScore(creature, refuge) * 0.5,
           sleep_land: creature.needs.sleep_pressure * 0.5,
+          episode: episodeActionBias(creature, "goto_food", refuge, undefined),
         },
         rng,
         noiseMax,
@@ -334,7 +289,6 @@ function decidePenguinActions(
     );
   }
 
-  // eat: доступно только если сейчас в кормовой зоне с рыбой.
   if ((feedingZones as string[]).includes(creature.zone) && fishAvailability(creature.zone as ZoneName) > 0) {
     candidates.push(
       finalize(
@@ -344,8 +298,11 @@ function decidePenguinActions(
         {
           need: needTerm(creature, { hunger: creature.needs.hunger * 1.5 }),
           hunger_boost: hungerBoost,
+          innate_drive: hungerDrive * creature.needs.hunger * 0.3,
           skill: skillTerm(creature, creature.skills.foraging),
           habit: habitTerm(creature, creature.zone),
+          safety: safetyScore(creature, creature.zone) * 0.2,
+          episode: episodeActionBias(creature, "eat", creature.zone, undefined),
         },
         rng,
         noiseMax,
@@ -353,9 +310,10 @@ function decidePenguinActions(
     );
   }
 
-  // Видимые касатки -> flee / display_vigor / alarm_call.
+  // Стимул «хищник в поле зрения» → кандидаты flee/signal с U из innate×perception.
   const orcasVisible = visible.filter((v) => v.species === "orca");
   const preyThreat = constants.hunting.prey_threat;
+  const innateOrcaThreat = innateSpeciesThreat(creature, "orca");
   if (orcasVisible.length > 0) {
     let nearestOrca = orcasVisible[0];
     let nearestDist = distance(creature.pos, nearestOrca.pos);
@@ -366,24 +324,29 @@ function decidePenguinActions(
         nearestOrca = orca;
       }
     }
-    const perceivedThreat = creature.perceivedStates.get(nearestOrca.id)?.perceivedThreat ?? preyThreat.baseline;
+    const perceivedThreat = creature.perceivedStates.get(nearestOrca.id)?.perceivedThreat ?? Math.max(preyThreat.baseline, innateOrcaThreat);
+    const threatFelt = Math.max(perceivedThreat, innateOrcaThreat * 0.85);
     const orcaAversion = aversionStrength(nearestOrca.id);
     const senseR = visionRange(creature, phase) || 1;
     const proximity = preyThreat.flee_proximity_weight * (1 - Math.min(1, nearestDist / senseR));
+    const refuge = bestSafetyZone(creature, onWater);
 
     candidates.push(
       finalize(
         "flee",
-        creature.zone,
+        refuge,
         nearestOrca.id,
         {
-          threat: perceivedThreat * 1.2,
+          innate: innateOrcaThreat * 0.9,
+          threat: threatFelt * 1.0,
           proximity,
           aversion: orcaAversion * 0.5,
+          safety: safetyScore(creature, refuge) * 0.4,
           trait: traitTerm(creature, (t) => t.caution * 0.5 - t.courage * 0.3),
           skill: skillTerm(creature, creature.skills.evasion),
           emotion: fearTerm(creature) * 0.5,
-          intention: intentionTerm(creature, "flee", creature.zone, nearestOrca.id, false),
+          intention: intentionTerm(creature, "flee", refuge, nearestOrca.id, false),
+          episode: episodeActionBias(creature, "flee", refuge, nearestOrca.id),
         },
         rng,
         noiseMax,
@@ -399,7 +362,8 @@ function decidePenguinActions(
           nearestOrca.id,
           {
             trait: traitTerm(creature, (t) => t.expressiveness * 0.6 + t.courage * 0.2),
-            threat: perceivedThreat * 0.3,
+            threat: threatFelt * 0.3,
+            innate: innateOrcaThreat * 0.15,
             cost: -display_vigor_cost_pct_energy * creature.needs.energy,
           },
           rng,
@@ -408,19 +372,14 @@ function decidePenguinActions(
       );
     }
 
-    pushAlarmCall(candidates, ctx, perceivedThreat, noiseMax);
+    pushAlarmCall(candidates, ctx, threatFelt, noiseMax);
   } else {
-    // Ложная тревога ради конкурентного доступа к еде (7.8.2/7.8.7) — тот
-    // же список слагаемых U(a), без хищника рядом просто отсутствует
-    // threat-компонента; голод/агрессия/низкая осторожность создают
-    // собственный, самостоятельный стимул подать сигнал. Доступно и
-    // детёнышу (7.9: "детёныш может кричать тревогу").
     pushAlarmCall(candidates, ctx, 0, noiseMax);
   }
 
-  // socialize / approach(friend) / court(partner)
   const penguinsVisible = visible.filter((v) => v.species === "penguin" && v.id !== creature.id);
   const socialPredatorPenalty = orcasVisible.length > 0 ? -preyThreat.social_suppress : 0;
+  const peerPull = innateSpeciesValue(creature, "penguin");
   if (penguinsVisible.length > 0) {
     let maxPeerAversion = 0;
     for (const other of penguinsVisible) {
@@ -436,6 +395,7 @@ function decidePenguinActions(
           trait: traitTerm(creature, (t) => t.sociability * 0.5),
           skill: skillTerm(creature, creature.skills.socializing),
           emotion: playfulTerm(creature) * 0.3,
+          innate_social: peerPull * 0.2,
           aversion: -maxPeerAversion * 0.3,
           predator_nearby: socialPredatorPenalty,
         },
@@ -508,7 +468,6 @@ function decidePenguinActions(
     }
   }
 
-  // guard_offspring / provision (7.9) — только у взрослых с живым потомством в радиусе охраны.
   if (ageStage === "adult") {
     const guardRadius = constants.kinship.offspring_guard_radius_units;
     const offspringNearby = visible.filter(
@@ -553,6 +512,8 @@ function decidePenguinActions(
       }
     }
   }
+
+  void ageWeeks;
 }
 
 function pushAlarmCall(candidates: Candidate[], ctx: DecideContext, perceivedThreat: number, noiseMax: number): void {
@@ -596,15 +557,15 @@ function decideOrcaActions(
   const { creature, visible, bondStrength, rng, currentTick, phase } = ctx;
   const constants = getSimConstants();
   const perceptionRadius = visionRange(creature, phase);
+  const preyDrive = creature.instincts.needDrive.hungerSeekPrey;
+  const innatePreyValue = innateSpeciesValue(creature, "penguin");
 
+  // Физика: жертва на льду недоступна (не стратегия убежища в AI касатки).
   const preyVisible = visible.filter((v) => v.species === "penguin" && !isLandSim(v.pos.x, v.pos.y));
   if (preyVisible.length > 0) {
     let best: Creature | undefined;
     let bestScore = -Infinity;
-    let bestNormDist = 0;
-    let bestPerceivedVigor = 0;
     let bestGroupProtected = false;
-    let bestIsJuvenile = false;
 
     for (const prey of preyVisible) {
       const perceivedVigor = creature.perceivedStates.get(prey.id)?.perceivedVigor ?? 0.5;
@@ -620,19 +581,20 @@ function decideOrcaActions(
           normalizedDist: normDist,
           groupProtected,
           isJuvenile,
-        }) * boost;
+        }) *
+        boost *
+        (0.5 + innatePreyValue * 0.5);
       if (score > bestScore) {
         bestScore = score;
         best = prey;
-        bestNormDist = normDist;
-        bestPerceivedVigor = perceivedVigor;
         bestGroupProtected = groupProtected;
-        bestIsJuvenile = isJuvenile;
       }
     }
 
     if (best) {
-      const huntHungerBoost = creature.needs.hunger * 0.4;
+      // Сытость через need + innate: сытый охотится слабее (aggression может перебить).
+      const satietyPenalty = -Math.max(0, 0.35 - creature.needs.hunger) * preyDrive * 0.9;
+      const huntHungerBoost = creature.needs.hunger * preyDrive * 0.7;
       candidates.push(
         finalize(
           "hunt",
@@ -641,10 +603,13 @@ function decideOrcaActions(
           {
             need: needTerm(creature, { hunger: creature.needs.hunger }),
             hunger_boost: huntHungerBoost,
+            innate_prey: innatePreyValue * 0.45,
+            satiety: satietyPenalty,
             skill: skillTerm(creature, creature.skills.hunting),
-            trait: traitTerm(creature, (t) => t.aggression * 0.3 + t.courage * 0.2),
+            trait: traitTerm(creature, (t) => t.aggression * 0.35 + t.courage * 0.2),
             attractiveness: bestScore * 0.5,
             intention: intentionTerm(creature, "hunt", best.zone, best.id, false),
+            episode: episodeActionBias(creature, "hunt", best.zone, best.id),
           },
           rng,
           noiseMax,
@@ -662,6 +627,8 @@ function decideOrcaActions(
               skill: skillTerm(creature, creature.skills.hunting) * 0.8,
               trait: traitTerm(creature, (t) => t.caution * 0.3 - t.aggression * 0.1),
               wariness: preyPerceivedThreatOfMe * 0.6,
+              innate_prey: innatePreyValue * 0.2,
+              episode: episodeActionBias(creature, "stealth_approach", best.zone, best.id),
             },
             rng,
             noiseMax,
@@ -669,9 +636,6 @@ function decideOrcaActions(
         );
       }
 
-      // Партнёр для coordinate_hunt (7.9): "bonds.strength >= 0.4" — тот же
-      // порог, что и у дружбы (social.friendship.threshold), переиспользуем
-      // константу вместо дублирования числа.
       const coordinationThreshold = constants.social.friendship.threshold;
       const orcasVisible = visible.filter((v) => v.species === "orca" && v.id !== creature.id);
       let bestPartner: Creature | undefined;
@@ -694,6 +658,8 @@ function decideOrcaActions(
               trait: traitTerm(creature, (t) => t.sociability * 0.3 + t.aggression * 0.2),
               bond: bestPartnerBond * 0.5,
               groupBonus: bestGroupProtected ? 0.4 : 0,
+              innate_prey: innatePreyValue * 0.25,
+              episode: episodeActionBias(creature, "coordinate_hunt", best.zone, best.id),
             },
             rng,
             noiseMax,
@@ -703,8 +669,8 @@ function decideOrcaActions(
     }
   }
 
-  // socialize / approach / court для касаток — связи функциональны (7.9), но и социально значимы.
   const orcasVisible = visible.filter((v) => v.species === "orca" && v.id !== creature.id);
+  const kinPull = innateSpeciesValue(creature, "orca");
   if (orcasVisible.length > 0) {
     candidates.push(
       finalize(
@@ -715,6 +681,7 @@ function decideOrcaActions(
           need: needTerm(creature, { social: creature.needs.social }),
           trait: traitTerm(creature, (t) => t.sociability * 0.5),
           skill: skillTerm(creature, creature.skills.socializing),
+          innate_social: kinPull * 0.25,
         },
         rng,
         noiseMax,
@@ -752,4 +719,7 @@ function decideOrcaActions(
       }
     }
   }
+
+  void ageWeeks;
+  void isNight;
 }

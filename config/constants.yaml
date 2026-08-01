@@ -170,6 +170,10 @@ memory:
   # Чувствительность: низкая.
   core_memory_significance_threshold: 0.9
 
+  # Затухание perceived_zone_threat за тик (было 0.15 хардкод — слишком быстро
+  # для выученного «опасная бухта»). Чувствительность: высокая для обучения.
+  zone_threat_decay_per_tick: 0.04
+
 utility_ai:
   # Максимальная амплитуда случайного шума в utility-функции реактивного слоя (уровень 1).
   # Строго меньше вклада черт характера — живость поведения без потери
@@ -238,10 +242,10 @@ world:
   # Изменено с 0.20 на 0.25 2026-07-31: live-мир всё ещё выше алёртов —
   # следующий шаг из BALANCE_LOG («~0.25»); см. ops/BALANCE_LOG.md.
   # Изменено с 0.25 на 0.28 2026-07-31: вместе с урезкой fish_respawn —
-  # Legacy А.9: раньше P(kill|contact). С 2026-08-01 касание при охоте = смерть
-  # (caught всегда); удача живёт в pre_contact (срыв/flee). См. DEVIATIONS.
-  # Чувствительность: низкая (на исход контакта не влияет).
-  base_hunt_success_probability: 1.0
+  # P(kill|contact) до модификаторов А.10. 2026-08-01 living-world: снова кубик
+  # (было 1.0 always-kill → wipe). См. ops/BALANCE_LOG.md.
+  # Чувствительность: высокая — летальность охоты.
+  base_hunt_success_probability: 0.45
 
   # Именованные зоны карты и их доли площади (А.10). Порядок ниже задаёт
   # раскладку зон полосами слева направо вдоль ширины карты (см.
@@ -312,10 +316,11 @@ movement:
   old_age_speed_multiplier: 0.7
 
   # Множители действий к базовой скорости среды (реальная охота/бегство).
+  # 2026-08-01 living-world: flee > hunt, чтобы убежище успевало отрабатывать.
   action_speed_multipliers:
-    hunt: 1.35
-    coordinate_hunt: 1.4
-    flee: 1.2
+    hunt: 1.15
+    coordinate_hunt: 1.25
+    flee: 1.45
     stealth_approach: 0.55
 
   # Радиус «тела» в у.е. сима — separation / охота (не клиренс берега).
@@ -325,9 +330,9 @@ movement:
     orca: 28
 
   # Стена берега: круг в центре тела, R = halfLength спрайта / 1.6.
-  # orca L=84 → 27; penguin water L=48 → 15. Не пересекает лёд.
+  # orca L=84 → 27; penguin water L=32 → 10. Не пересекает лёд.
   shore_clearance_radius_units:
-    penguin_water: 15
+    penguin_water: 10
     orca: 27
 
   # stealth_approach: компромисс скорости и скрытности — медленнее движение
@@ -621,10 +626,14 @@ reproduction:
   # усреднённого опыта родителей, сохраняя пространство для личной практики.
   # Чувствительность: средняя.
   culture_inherit:
-    habit_weight: 0.4
+    habit_weight: 0.55
     habit_noise_amplitude: 0.1
-    weights_blend: 0.15
-    skill_seed: 0.1
+    weights_blend: 0.2
+    skill_seed: 0.2
+    # Доля родительского уточнения поверх видового innate seed.
+    instinct_parent_overlay: 0.25
+    zone_threat_seed: 0.35
+    aversion_seed: 0.25
 
 foraging:
   # А.4 задаёт форму "P(успех кормёжки) = base × (0.6 + 0.8×foraging)", но
@@ -646,12 +655,11 @@ foraging:
   hunger_reduction_per_meal: 0.3
 
 hunting:
-  # Касание при охоте = смерть (UX). Модификаторы А.10 перенесены в
-  # pre_contact (срыв сближения / notice→flee). base_hunt в world.* = 1.0.
+  # Контакт снова вероятностный (А.10); pre_contact + notice остаются.
   # Чувствительность: высокая.
 
-  # Воспринимаемая угроза касатки у пингвина (flee / alarm). Без floor
-  # threat угасает к 0 за десятки тиков и колония «не боится» рядом с orca.
+  # Воспринимаемая угроза касатки у пингвина (flee / alarm). Floor — минимум
+  # при видимости; старт threat берётся из instincts.species_affect.orca.
   # Чувствительность: высокая — читаемость драмы хищник↔жертва.
   prey_threat:
     baseline: 0.45
@@ -661,16 +669,14 @@ hunting:
     # Вычитается из U(socialize/approach/court), пока касатка в радиусе.
     social_suppress: 0.75
 
-  # Радиус физического касания = body_radius penguin+orca (10+28).
-  # При охотничьем action в этом радиусе — always kill.
-  # Чувствительность: высокая — прямой рычаг летальности охоты.
-  contact_radius_units: 38
+  # Радиус физического касания (был 38 = wipe). Чувствительность: высокая.
+  contact_radius_units: 22
 
   # Удача до контакта: полоса срыва + notice→flee.
   # group/guard вместо ×P дают отталкивание; coordinate отменяет срыв.
   pre_contact:
     approach_band_extra_units: 16
-    defense_nudge_units: 10
+    defense_nudge_units: 16
     break_cooldown_ticks: 8
 
   # Кулдаун повторной попытки охоты ТОЙ ЖЕ касатки на ТУ ЖЕ жертву — после
@@ -688,8 +694,8 @@ hunting:
   hungry_hunter_hunger_threshold: 0.5
 
   # Базовая вероятность того, что жертва "заметит касатку заранее" —
-  # теперь триггер commit flee до контакта, а не ×0.5 к P(kill).
-  notice_in_advance_base_probability: 0.5
+  # триггер commit flee до контакта + ×noticed_in_advance_multiplier к P(kill).
+  notice_in_advance_base_probability: 0.65
 
   # Стартовые (genesis) веса формулы attractiveness() касатки (А.4/7.8.3):
   # w_vigor индивидуален и дрейфует (скепсис к сигналам, 7.8.4) — структура
@@ -714,6 +720,30 @@ hunting:
   # в ТЗ, реализован как вероятность успеха передачи еды.
   provision_base_success_probability: 0.6
   provision_hunger_reduction: 0.25
+
+# Врождённые инстинкты (priors) — seed при genesis/birth. Не сценарии действий:
+# задают силу чувств; U(a) и обучение решают стратегию.
+instincts:
+  penguin:
+    species_affect:
+      orca: { threat: 0.85, value: 0.0 }
+      penguin: { threat: 0.0, value: 0.2 }
+    need_drive:
+      hunger_seek_food: 0.55
+      hunger_seek_prey: 0.0
+    medium_bias:
+      land: 0.18
+      water: -0.06
+  orca:
+    species_affect:
+      penguin: { threat: 0.0, value: 0.8 }
+      orca: { threat: 0.0, value: 0.25 }
+    need_drive:
+      hunger_seek_food: 0.0
+      hunger_seek_prey: 0.6
+    medium_bias:
+      land: -0.9
+      water: 0.12
 
 episode_significance:
   # Стартовая значимость эпизодов памяти по типу события. Не выписаны в

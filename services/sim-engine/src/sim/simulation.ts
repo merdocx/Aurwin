@@ -8,7 +8,7 @@ import { SpatialGrid, type IndexedPoint } from "../world/spatialIndex.js";
 import type { ZoneName } from "../world/zones.js";
 import { createGenesisPopulation } from "./genesis.js";
 import { processReintroduction } from "./reintroduction.js";
-import { canMate, createOffspring, isForbiddenPair } from "./reproduction.js";
+import { canMate, createOffspring, inheritAversions, isForbiddenPair } from "./reproduction.js";
 import { ageStageFor, ageWeeksAt } from "./lifecycle.js";
 import { advanceBioClocks, rollOldAgeDeath } from "./needs.js";
 import { sense, decayPerceivedStates, reinforceVisiblePredatorThreat, bumpPreyThreatOfOrca, visionRange, hearingRange } from "./perception.js";
@@ -27,7 +27,7 @@ import {
 } from "./actions.js";
 import { applyPreContactDefense, applySoftSeparation } from "./separation.js";
 import { decayAversions, decayUntouchedBonds, growBondForPair, recordAversion, bondStrengthLookup, aversionStrengthLookup } from "./social.js";
-import { decaySkills, growSkill, updateHabit } from "./skillsHabits.js";
+import { decaySkills, growSkill, shareHabitThreat, updateHabit } from "./skillsHabits.js";
 import { computeAuthority, transmissionWeight } from "./authority.js";
 import { trueVigor } from "./vigor.js";
 import { distance } from "./huntingAttractiveness.js";
@@ -36,6 +36,7 @@ import { applyTraitDeltas, applyWeightDeltas, generateMockReflection, shouldTrig
 import { applyEmotionDelta, EMOTION_DELTAS } from "./emotion.js";
 import { applyTrustUpdate, resolveAlarmCallsOnExpiry, resolveDisplayVigorAgainstHunt, wakeSleepersOnAlarm } from "./signalResolution.js";
 import { ticksToRealSeconds, realHoursToTicks } from "./time.js";
+import { isLandSim } from "../world/landMask.js";
 import {
   aversionKey,
   bondKey,
@@ -106,6 +107,12 @@ export interface SimAccumulators {
   coordinatedHunts: number;
   transmissionDepth2Plus: number;
   totalEpisodesCreated: number;
+  huntMisses: number;
+  fleeCommitted: number;
+  approachBroken: number;
+  reachedHighSafety: number;
+  decisionsWithInnate: number;
+  decisionsTotal: number;
 }
 
 function freshAccumulators(): SimAccumulators {
@@ -119,6 +126,12 @@ function freshAccumulators(): SimAccumulators {
     coordinatedHunts: 0,
     transmissionDepth2Plus: 0,
     totalEpisodesCreated: 0,
+    huntMisses: 0,
+    fleeCommitted: 0,
+    approachBroken: 0,
+    reachedHighSafety: 0,
+    decisionsWithInnate: 0,
+    decisionsTotal: 0,
   };
 }
 
@@ -343,6 +356,14 @@ export class Simulation {
       const decision = this.decideFor(creature, visibleByCreature.get(creature.id) ?? [], phase, isNight);
       decisions.set(creature.id, decision);
       creature.actionCounts[decision.action] = (creature.actionCounts[decision.action] ?? 0) + 1;
+      this.acc.decisionsTotal += 1;
+      const chosen = decision.factors.find((f) => f.action === decision.action || f.action.startsWith(`${decision.action}(`));
+      if (chosen?.breakdown && (chosen.breakdown.innate !== undefined || chosen.breakdown.innate_prey !== undefined || chosen.breakdown.innate_drive !== undefined || chosen.breakdown.innate_social !== undefined)) {
+        this.acc.decisionsWithInnate += 1;
+      }
+      if (decision.action === "flee" && (decision.zone === "main_ice" || decision.zone === "far_ice") && isLandSim(creature.pos.x, creature.pos.y) === false) {
+        // fleeing toward ice counts toward safety metric when later resolved
+      }
       if (this.shouldLogDecision(creature.id)) {
         const entry: DecisionLogEntry = {
           creatureId: creature.id,
@@ -607,11 +628,20 @@ export class Simulation {
       decisions.set(prey.id, {
         action: "flee",
         targetId: creature.id,
-        zone: prey.zone,
+        zone: isLandSim(prey.pos.x, prey.pos.y) ? prey.zone : "main_ice",
         factors: [{ action: "flee", utility: 1, breakdown: { noticed_in_advance: 1 } }],
       });
       prey.actionCommitTicks = steerCommit;
       prey.actionCounts.flee = (prey.actionCounts.flee ?? 0) + 1;
+      this.acc.fleeCommitted += 1;
+      this.emitWorldEvent({
+        tick: this.tick_,
+        type: "flee_committed",
+        actorId: prey.id,
+        targetId: creature.id,
+        zone: prey.zone,
+        payload: { reason: "noticed_in_advance" },
+      });
     }
 
     // Второй проход: движение + действия с исходом. Существо могло быть
@@ -758,16 +788,32 @@ export class Simulation {
       if (!orca || !prey || !isAlive(prey)) continue;
       this.emitWorldEvent({
         tick: this.tick_,
+        type: "approach_broken",
+        actorId: orca.id,
+        targetId: prey.id,
+        zone: prey.zone,
+        payload: { caught: false, broken_approach: true },
+      });
+      this.emitWorldEvent({
+        tick: this.tick_,
         type: "hunt_attempt",
         actorId: orca.id,
         targetId: prey.id,
         zone: prey.zone,
         payload: { caught: false, broken_approach: true },
       });
+      this.acc.approachBroken += 1;
+      this.acc.huntMisses += 1;
       applyEmotionDelta(orca, EMOTION_DELTAS.hunt_fail_orca);
       applyEmotionDelta(prey, EMOTION_DELTAS.hunt_survived_prey);
       tickOutcomes.push({ creatureId: orca.id, zone: prey.zone, score: -0.3 });
-      tickOutcomes.push({ creatureId: prey.id, zone: prey.zone, score: -1 });
+      if (isLandSim(prey.pos.x, prey.pos.y)) {
+        tickOutcomes.push({ creatureId: prey.id, zone: prey.zone, score: 0.55 });
+        this.acc.reachedHighSafety += 1;
+      } else {
+        tickOutcomes.push({ creatureId: prey.id, zone: prey.zone, score: -1 });
+        prey.perceivedZoneThreat.set(prey.zone, Math.min(1, (prey.perceivedZoneThreat.get(prey.zone) ?? 0) + 0.35));
+      }
       tickSkillGrowth.push({ creatureId: prey.id, skill: "evasion" });
       this.episodesThisTick.push(
         recordEpisode(orca, this.tick_, { type: "hunt_attempt_failed_by_hunter", participants: [prey.id], significance: getSimConstants().episode_significance.hunt_attempt_failed_by_hunter, zone: prey.zone }, this.nextId),
@@ -777,6 +823,11 @@ export class Simulation {
         recordEpisode(prey, this.tick_, { type: "hunt_attempt_survived_by_prey", participants: [orca.id], significance: getSimConstants().episode_significance.hunt_attempt_survived_by_prey, zone: prey.zone }, this.nextId),
       );
       this.markEventWindow(prey.id);
+      const nearbySame = (this.spatialIndex.queryRadius(prey.pos.x, prey.pos.y, getSimConstants().social.bond_proximity_radius_units, prey.id) ?? [])
+        .map((p) => this.creatures.get(p.id))
+        .filter((c): c is Creature => !!c && isAlive(c) && c.species === prey.species);
+      const { witnesses, friends } = this.witnessesAndFriendsOf(prey, nearbySame);
+      shareHabitThreat(prey, [...witnesses, ...friends], prey.zone, isLandSim(prey.pos.x, prey.pos.y) ? 0.4 : -0.6, isLandSim(prey.pos.x, prey.pos.y) ? 0 : 0.3);
       // Кулдаун пары — окно уйти после срыва.
       this.lastHuntAttemptTick.set(`${orca.id}|${prey.id}`, this.tick_);
     }
@@ -848,6 +899,15 @@ export class Simulation {
       this.killCreature(prey, "predation");
       if (guarded) this.acc.guardEpisodes += 1;
     } else {
+      this.acc.huntMisses += 1;
+      this.emitWorldEvent({
+        tick: this.tick_,
+        type: "hunt_miss",
+        actorId: orca.id,
+        targetId: prey.id,
+        zone: prey.zone,
+        payload: { successProbability: outcome.successProbability, noticedInAdvance: outcome.noticedInAdvance },
+      });
       applyEmotionDelta(orca, EMOTION_DELTAS.hunt_fail_orca);
       applyEmotionDelta(prey, EMOTION_DELTAS.hunt_survived_prey);
       tickOutcomes.push({ creatureId: orca.id, zone: prey.zone, score: -0.3 });
@@ -856,7 +916,13 @@ export class Simulation {
       );
 
       tickSkillGrowth.push({ creatureId: prey.id, skill: "evasion" });
-      tickOutcomes.push({ creatureId: prey.id, zone: prey.zone, score: -1 });
+      if (isLandSim(prey.pos.x, prey.pos.y)) {
+        tickOutcomes.push({ creatureId: prey.id, zone: prey.zone, score: 0.55 });
+        this.acc.reachedHighSafety += 1;
+      } else {
+        tickOutcomes.push({ creatureId: prey.id, zone: prey.zone, score: -1 });
+        prey.perceivedZoneThreat.set(prey.zone, Math.min(1, (prey.perceivedZoneThreat.get(prey.zone) ?? 0) + 0.4));
+      }
       recordAversion(this.aversions, prey.id, orca.id, getSimConstants().episode_significance.hunt_attempt_survived_by_prey);
       const preyEpisode = recordEpisode(
         prey,
@@ -867,6 +933,17 @@ export class Simulation {
       this.episodesThisTick.push(preyEpisode);
       this.markEventWindow(prey.id);
       const { witnesses, friends } = this.witnessesAndFriendsOf(prey, visiblePrey);
+      const learners = [...witnesses, ...friends];
+      shareHabitThreat(
+        prey,
+        learners,
+        prey.zone,
+        isLandSim(prey.pos.x, prey.pos.y) ? 0.4 : -0.6,
+        isLandSim(prey.pos.x, prey.pos.y) ? 0 : 0.35,
+      );
+      if (isLandSim(prey.pos.x, prey.pos.y)) {
+        updateHabit(prey, "main_ice", 0.6);
+      }
       const propagated = propagateSocialLearning(prey, preyEpisode, witnesses, friends, this.tick_, this.nextId);
       this.episodesThisTick.push(...propagated);
       this.acc.totalEpisodesCreated += propagated.length + 1;
@@ -1032,6 +1109,7 @@ export class Simulation {
       if (!this.rng.bool(constants.reproduction.attempt_probability_per_tick)) continue;
 
       const offspring = createOffspring(a, b, this.tick_, this.rng, this.nameGen, this.nextId);
+      inheritAversions(a, b, offspring.id, this.aversions);
       a.lastReproducedAtTick = this.tick_;
       b.lastReproducedAtTick = this.tick_;
       const newlyBonded = record.kind !== "mate";

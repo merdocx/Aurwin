@@ -2,7 +2,9 @@ import type { Pool } from "pg";
 import { ecoZoneAtSim } from "../world/landMask.js";
 import type { ZoneName } from "../world/zones.js";
 import { ageStageFor, ageWeeksAt } from "../sim/lifecycle.js";
-import type { AversionRecord, BondRecord, Creature, Episode, PerceivedState, SignalTrustEntry } from "../sim/types.js";
+import { seedInstincts } from "../sim/instincts.js";
+import { Rng } from "../sim/rng.js";
+import type { AversionRecord, BondRecord, Creature, Episode, Instincts, PerceivedState, SignalTrustEntry } from "../sim/types.js";
 import type { RestoredWorldState } from "../sim/simulation.js";
 
 /**
@@ -57,7 +59,7 @@ export async function loadWorldState(pool: Pool): Promise<RestoredWorldState & {
   const creaturesResult = await pool.query(`
     SELECT id, species, name, sex, born_at_tick, parent_a, parent_b, pos_x, pos_y, zone,
            traits, traits_birth, needs, emotion, intentions, narrative, narrative_facts,
-           skills, chronotype, is_asleep, activity, authority, habits, weights, weights_birth,
+           skills, chronotype, is_asleep, activity, authority, habits, instincts, weights, weights_birth,
            last_reflection_at, last_reproduced_at_tick, continuous_starvation_real_hours
     FROM creatures WHERE died_at_tick IS NULL
   `);
@@ -90,6 +92,7 @@ export async function loadWorldState(pool: Pool): Promise<RestoredWorldState & {
       ageStage: ageStageFor(row.species, ageWeeksAt(bornAtTick, tick)),
       authority: row.authority,
       habits: row.habits ?? {},
+      instincts: (row.instincts as Instincts | null | undefined) ?? seedInstincts(row.species, row.traits, new Rng(bornAtTick ^ tick)),
       weights: row.weights,
       weightsBirth: row.weights_birth,
       lastReflectionAt: Number(row.last_reflection_at ?? tick),
