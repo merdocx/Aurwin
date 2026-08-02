@@ -1,5 +1,7 @@
 # Aurwin
 
+[![npm test](https://github.com/merdocx/Aurwin/actions/workflows/test.yml/badge.svg)](https://github.com/merdocx/Aurwin/actions/workflows/test.yml)
+
 Живая 24/7-симуляция колонии пингвинов и касаток: существа принимают решения
 через utility AI, а личность каждого — характер, память, self-narrative —
 развивается через периодическую LLM-рефлексию (Claude). Полное техническое
@@ -45,6 +47,10 @@ npm test
 Тесты поднимают одноразовый контейнер `postgres:16-alpine` через Docker
 (см. `tests/setup/global-db-setup.ts`) — нужен доступный `docker`, но не
 обязательно полный `docker compose` стек.
+
+CI: GitHub Actions [`.github/workflows/test.yml`](.github/workflows/test.yml)
+гоняет `npm test` на каждый push/PR в `main` (и вручную через
+`workflow_dispatch`). На `main` включён required check `npm test`.
 
 ## Схема БД и миграции (services/db)
 

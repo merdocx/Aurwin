@@ -5,6 +5,14 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   unit:
@@ -18,12 +26,14 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # engines: >=20; 22 LTS — без deprecation Node 20 на runners.
+          node-version: "22"
           cache: npm
 
       - name: Install
         run: npm ci
 
-      # Vitest global-db-setup поднимает ephemeral postgres:16-alpine через Docker.
+      # Vitest globalSetup поднимает ephemeral postgres:16-alpine через Docker
+      # (tests/setup/global-db-setup.ts). На ubuntu-latest Docker уже есть.
       - name: Test
         run: npm test
