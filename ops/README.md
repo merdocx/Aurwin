@@ -223,11 +223,14 @@ ops/retention/run.sh
 ## 6. Систематические проверки после любого деплоя
 
 ```bash
-npm test                                    # 29 файлов тестов, зелёный обязателен
+npm test                                    # ~38 файлов / 397 тестов, зелёный обязателен
 docker compose up -d                        # весь стек поднимается без ошибок
 docker compose ps                           # все сервисы Up (postgres — Up (healthy))
 curl -s http://127.0.0.1:9090/api/v1/targets | grep -o '"health":"[a-z]*"'   # оба job = up
 ```
+
+На GitHub: Actions → workflow **test** (`npm test` на push/PR в `main`).
+Required status check на ветке `main`: `npm test`.
 
 ## 7. Секреты
 
