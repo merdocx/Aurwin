@@ -47,16 +47,17 @@ describe("движение и отражение от границ карты (�
   });
 
   it("отражается от левой/верхней/нижней границ аналогично", () => {
+    // v=7: 3-7=-4 → reflect1D даёт 4; 597+7=604 → 596 при height=600
     const left = stepAndReflect({ x: 3, y: 300 }, { x: -v, y: 0 }, bounds);
-    expect(left.position.x).toBeCloseTo(11, 9);
+    expect(left.position.x).toBeCloseTo(4, 9);
     expect(left.velocity.x).toBe(v);
 
     const top = stepAndReflect({ x: 250, y: 3 }, { x: 0, y: -v }, bounds);
-    expect(top.position.y).toBeCloseTo(11, 9);
+    expect(top.position.y).toBeCloseTo(4, 9);
     expect(top.velocity.y).toBe(v);
 
     const bottom = stepAndReflect({ x: 250, y: 597 }, { x: 0, y: v }, bounds);
-    expect(bottom.position.y).toBeCloseTo(589, 9);
+    expect(bottom.position.y).toBeCloseTo(596, 9);
     expect(bottom.velocity.y).toBe(-v);
   });
 

@@ -25,7 +25,12 @@ describe("reflection-worker: честность повествования (7.8.
 
   /** См. integration.test.ts — общий эфемерный Postgres на весь пакет тестов, чистим "зависшие" due-кандидаты других файлов перед точными числовыми проверками. */
   async function resetDanglingCandidates(pool: ReturnType<typeof getTestPool>): Promise<void> {
-    await pool.query(`DELETE FROM reflections WHERE status IN ('queued', 'failed')`);
+    await pool.query(`DELETE FROM reflections WHERE status IN ('queued', 'failed', 'sent')`);
+    // applied/discarded event-строки других тестов забивают event_global_limit_per_hour
+    // (после ужесточения 30→10 это ломает сквозные тесты в полном прогоне).
+    await pool.query(
+      `DELETE FROM reflections WHERE kind = 'event' AND created_at > now() - interval '25 hours'`,
+    );
     await pool.query(`UPDATE episodes SET consumed_by_reflection = TRUE WHERE consumed_by_reflection = FALSE`);
     await pool.query(`UPDATE creatures SET is_asleep = FALSE WHERE is_asleep = TRUE`);
   }

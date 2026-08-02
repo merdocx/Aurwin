@@ -904,6 +904,17 @@ THIRD_LAND, MEDIUM_SEEDS, SMALL_BERGS. Именованные зоны — мя�
    (`snapshot_interval_ticks`). Между полными снапшотами возможна потеря
    ≤ ~1 минуты (как и для прочих полей полного снапшота).
 
+## 2026-08-02 — ops: timers live + WAL prune
+
+1. **systemd timers установлены на боевом хосте** (`aurwin-backup.timer`,
+   `aurwin-retention.timer`) — до этого скрипты были в репо, но не
+   `enable --now` (автобэкапы фактически не крутились).
+
+2. **`ops/backup/prune_wal.sh`** — удаляет WAL-сегменты в volume
+   `wal_archive` старше `AURWIN_WAL_RETENTION_DAYS` (default 14).
+   Вызывается из `ops/retention/run.sh`. Без prune архив рос безлимитно
+   (~4.5 GB на момент аудита).
+
 ## 2026-08-02 — LLM budget hard stop + bond_broken → Haiku
 
 После перерасхода ~$4.7/сутки (план $0.40) при N≈11:

@@ -32,9 +32,12 @@ describe("reflection-worker: интеграционный цикл эпизод 
     // due-кандидаты (это часть ИХ проверок). Чтобы точные числа ниже
     // (applied===6, ровно 3 createMessage, ровно один batch на 3 существа)
     // не зависели от порядка запуска файлов, гарантируем чистый старт именно
-    // для отбора кандидатов — не трогая уже завершённые (applied/discarded/
-    // failed) строки других тестов, только незавершённые триггеры.
-    await pool.query(`DELETE FROM reflections WHERE status IN ('queued', 'failed')`);
+    // для отбора кандидатов. Также чистим недавние event-строки: иначе
+    // event_global_limit_per_hour (10) уже забит applied из queue.test.
+    await pool.query(`DELETE FROM reflections WHERE status IN ('queued', 'failed', 'sent')`);
+    await pool.query(
+      `DELETE FROM reflections WHERE kind = 'event' AND created_at > now() - interval '25 hours'`,
+    );
     await pool.query(`UPDATE episodes SET consumed_by_reflection = TRUE WHERE consumed_by_reflection = FALSE`);
     await pool.query(`UPDATE creatures SET is_asleep = FALSE WHERE is_asleep = TRUE`);
 

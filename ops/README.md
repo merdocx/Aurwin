@@ -168,6 +168,10 @@ Node.js. Пул сам переподключается на следующем 
      наблюдателя) падает на каждом сегменте с `Permission denied` — это
      реальный дефект, обнаруженный и исправленный в этой фазе, см.
      `DEVIATIONS.md`).
+   - Ротация WAL: `ops/backup/prune_wal.sh` удаляет сегменты старше
+     `AURWIN_WAL_RETENTION_DAYS` (по умолчанию = dump retention, 14 суток).
+     Вызывается из `ops/retention/run.sh` вместе с DB-maintenance
+     (`aurwin-retention.timer`). Без prune volume растёт безлимитно.
 
 Запустить бэкап вручную (например, перед рискованной миграцией):
 
@@ -200,13 +204,15 @@ ops/backup/restore.sh ops/backup/dumps/aurwin-<TIMESTAMP>.dump --yes
 `ops/retention/run.sh` запускает `runRetentionMaintenance()`
 (`services/db/src/maintenance/`) через одноразовый контейнер
 `db-maintenance` — вне тикового цикла sim-engine, тем же принципом, что и
-LLM-вызовы (7.3: обслуживание не блокирует симуляцию). Ежесуточно по
+LLM-вызовы (7.3: обслуживание не блокирует симуляцию). Затем вызывает
+`ops/backup/prune_wal.sh` (ротация WAL-архива). Ежесуточно по
 `aurwin-retention.timer` (02:30 UTC + случайная задержка). Что делает:
 прунинг/затухание значимости эпизодов, TTL `decision_log`, обнуление
 `reflections.request/response`, прореживание `trait_history`, сворачивание
 `world_events`/`signals` в суточные агрегаты, очистка транзиентных записей
-при смерти существа. Пороги — `config/constants.yaml` → секция `retention`
-(единый источник правды, CLAUDE.md п.3).
+при смерти существа, удаление старых WAL-сегментов. Пороги DB —
+`config/constants.yaml` → секция `retention` (единый источник правды,
+CLAUDE.md п.3); порог WAL — `AURWIN_WAL_RETENTION_DAYS` (env, default 14).
 
 Запустить вручную:
 
