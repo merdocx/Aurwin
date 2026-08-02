@@ -387,3 +387,26 @@ flee → `safetyScore` (лёд); события `flee_committed` / `approach_bro
 метрики `aurwin_hunt_misses_total`, `aurwin_innate_decision_ratio`, …
 
 Genesis counts не трогали (п.9). Калибровка: offline `--days 1 --fast` + live scrape.
+
+## 2026-08-02 — predation still drains (post living-world)
+
+Live ~11 real h / ~3.2 inner days after genesis: **20→11** penguins, 12/12
+deaths predation, ~1 death/h; births 3. Hunt attempts 42 (caught 12 / miss 30);
+flee_committed 257; approach_broken 3. Deaths only in water. Orca hunt speed
+~18.4 vs penguin flee ~11.6 (×1.59) — refuge exists but often unreachable.
+
+| Параметр | Было | Стало |
+|----------|------|-------|
+| base_hunt_success_probability | 0.45 | **0.32** |
+| contact_radius_units | 22 | **16** |
+| action_speed hunt / coord / flee | 1.15 / 1.25 / 1.45 | **1.05 / 1.15 / 1.55** |
+| notice_in_advance_base_probability | 0.65 | **0.75** |
+| pre_contact.defense_nudge_units | 16 | **20** |
+
+Genesis counts unchanged (п.9). Offline `--days 1 --fast` before live deploy.
+
+Offline `--days 1 --fast` after tune:
+- seed 42: 20→14 (min 14), predation 8, attempts 39
+- seed 7: 20→20 (min 18), predation 3, attempts 15
+- seed 99: 20→17 (min 17), predation 6, attempts 28
+No wipe; min ≥ alert. Live restored on new constants (tick ~19938, 9 penguins).

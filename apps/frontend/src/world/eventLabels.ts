@@ -26,6 +26,11 @@ export const EVENT_INFO: Record<string, EventLabelInfo> = {
     shortLabel: "попытка охоты",
     tone: "var(--accent-danger)",
   },
+  hunt_miss: {
+    label: "Охота не удалась",
+    shortLabel: "промах охоты",
+    tone: "var(--fg-tertiary)",
+  },
   birth: {
     label: "Родился детёныш",
     shortLabel: "родился",
@@ -50,6 +55,16 @@ export const EVENT_INFO: Record<string, EventLabelInfo> = {
     label: "Бегство",
     shortLabel: "убежал(а)",
     tone: "var(--accent-danger)",
+  },
+  flee_committed: {
+    label: "Бегство",
+    shortLabel: "убежал(а)",
+    tone: "var(--accent-danger)",
+  },
+  approach_broken: {
+    label: "Сближение сорвано",
+    shortLabel: "сближение сорвано",
+    tone: "var(--fg-tertiary)",
   },
   reintroduction: {
     label: "Вернулись в мир",
@@ -125,14 +140,49 @@ export const SIGNAL_PULSE_TONES: Record<string, string> = {
   woken_by_alarm: "var(--accent-warm)",
 };
 
+/**
+ * Ключевые события для ленты наблюдателя (жизнь / драма).
+ * `signal_sent` — только alarm_call (см. isKeyLogEvent).
+ */
+export const KEY_LOG_EVENT_TYPES = new Set([
+  "death",
+  "birth",
+  "reintroduction",
+  "hunt_attempt",
+  "hunt_success",
+  "hunt_miss",
+  "flee",
+  "flee_committed",
+  "mate_bonded",
+  "mate_breakup",
+  "bond_formed",
+  "guard_started",
+  "offense",
+  "provisioned",
+  "matured",
+  "grew_old",
+  "approach_broken",
+  "woken_by_alarm",
+]);
+
+export function isKeyLogEvent(type: string, payload?: Record<string, unknown>): boolean {
+  if (type === "signal_sent") {
+    return payload?.signalType === "alarm_call";
+  }
+  return KEY_LOG_EVENT_TYPES.has(type);
+}
+
 /** Типы событий, для которых на карте рисуется badge (не pulse). */
 export const BADGE_EVENT_TYPES = new Set([
   "death",
   "hunt_success",
+  "hunt_miss",
   "birth",
   "provisioned",
   "forage_success",
   "flee",
+  "flee_committed",
+  "approach_broken",
   "reintroduction",
   "bond_formed",
   "bond_broken",

@@ -1,4 +1,5 @@
 import type { Pool } from "pg";
+import { isLlmDailyBudgetExceeded, llmSpendLast24hUsd } from "./budgetGate.js";
 import { getConstants } from "./constants.js";
 import {
   countRecentEventReflections,
@@ -17,31 +18,19 @@ export interface QueuedCandidate {
 }
 
 /**
- * Отбор кандидатов на рефлексию (7.3): дебаунс (4ч событийная / 24ч фоновая)
- * и восстановление после рестарта воркера уже реализованы в SQL db.ts
- * (NOT EXISTS по истории `reflections` — переживает рестарт процесса, в
- * отличие от in-memory состояния). Здесь — то, что требует СОВМЕСТНОГО
- * решения по всей популяции разом:
- *   - глобальный лимит событийных вызовов (30/час И 120/сутки, 7.3) —
- *     двухуровневый, лимитирующим является более строгий из двух;
- *   - "слияние событий окна" — гарантируется тем, что buildReflectionRequest
- *     (request.ts) забирает ВСЕ непоглощённые эпизоды существа одним
- *     запросом, а не только тот, что удовлетворил триггер;
- *   - фоновая рефлексия глобального лимита не имеет (7.3/7.6 ограничивают
- *     только "событийные вызовы"; фоновая и так ограничена 24ч/существо +
- *     идёт через дешёвый Batch API).
- *
- * Каждый отобранный кандидат СРАЗУ получает строку `reflections` со
- * статусом 'queued' — это (а) резервирует его немедленно, чтобы повторный
- * проход selectCandidates (в т.ч. после падения процесса) не выбрал его
- * снова, пока вызов LLM не завершится или не провалится, и (б) сам факт
- * наличия этой строки — то самое "очередь копится" при недоступности API
- * (7.3, деградация): застрявшие 'queued'/'failed' строки видны в БД, а не
- * теряются вместе с процессом.
+ * Отбор кандидатов на рефлексию (7.3): дебаунс и восстановление после рестарта
+ * в SQL db.ts. Здесь — глобальные лимиты и жёсткий стоп по llm_daily_budget_usd.
  */
 export async function selectCandidates(pool: Pool): Promise<QueuedCandidate[]> {
   const constants = getConstants().reflection;
   const selected: QueuedCandidate[] = [];
+
+  if (isLlmDailyBudgetExceeded()) {
+    console.warn(
+      `[reflection-worker] суточный бюджет LLM исчерпан (spent≈$${llmSpendLast24hUsd().toFixed(3)} ≥ $${constants.llm_daily_budget_usd}) — новые кандидаты не ставятся`,
+    );
+    return selected;
+  }
 
   const eventIds = await findDueEventCandidates(pool);
   if (eventIds.length > 0) {
@@ -54,10 +43,11 @@ export async function selectCandidates(pool: Pool): Promise<QueuedCandidate[]> {
     const allowed = Math.min(remainingHourly, remainingDaily, eventIds.length);
 
     for (let i = 0; i < allowed; i++) {
+      if (isLlmDailyBudgetExceeded()) break;
       const creatureId = eventIds[i];
       const candidate: ReflectionCandidate = { creatureId, kind: "event", mergedEpisodeIds: [] };
       const built = await buildReflectionRequest(pool, candidate);
-      if (!built) continue; // существо умерло между отбором и сборкой запроса
+      if (!built) continue;
       candidate.mergedEpisodeIds = built.unconsumedEpisodeIds;
       const reflectionId = await insertQueuedReflection(pool, {
         creatureId,
@@ -69,10 +59,11 @@ export async function selectCandidates(pool: Pool): Promise<QueuedCandidate[]> {
     }
   }
 
+  if (isLlmDailyBudgetExceeded()) return selected;
+
   const backgroundIds = await findDueBackgroundCandidates(pool);
   for (const creatureId of backgroundIds) {
-    // Skip empty background: нет непоглощённых эпизодов — не тратим LLM,
-    // но фиксируем interval bookkeeping (discarded-строка), иначе due каждые N мин.
+    if (isLlmDailyBudgetExceeded()) break;
     const unconsumed = await fetchUnconsumedEpisodes(pool, creatureId);
     if (unconsumed.length === 0) {
       await insertSkippedEmptyBackground(pool, creatureId);

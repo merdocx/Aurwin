@@ -22,29 +22,30 @@ import type {
  *
  * Упрощение: "первая успешная охота" реализована как триггер на КАЖДЫЙ
  * hunt_success, а не только первый — отслеживание "первого раза" потребовало
- * бы отдельного счётчика, которого нет в схеме episodes; дебаунс (4ч) и
- * глобальные лимиты (30/час, 120/сутки) не дают этому упрощению разогнать
- * бюджет (см. ops/DEVIATIONS.md, фаза 6).
+ * бы отдельного счётчика, которого нет в схеме episodes; дебаунс и
+ * глобальные лимиты (event_global_limit_per_*) не дают этому упрощению разогнать
+ * бюджет (см. ops/DEVIATIONS.md, фаза 6 / 2026-08-02).
  *
  * Маршрутизация модели: EVENT_SONNET_TRIGGER_TYPES → Sonnet;
  * EVENT_HAIKU_TRIGGER_TYPES → Haiku (ops/DEVIATIONS.md, LLM cost opt).
  */
 /**
  * Событийные триггеры на Sonnet (глубокая рефлексия, 7.3): смерть близкого,
- * дружба, возрастные вехи. Частые/рутинные birth и hunt_success идут на
- * Haiku — см. EVENT_HAIKU_TRIGGER_TYPES и modelForEvent в anthropic.ts
- * (ops/DEVIATIONS.md, LLM cost opt).
+ * начало дружбы, возрастные вехи. Частые/шумные типы — на Haiku
+ * (ops/DEVIATIONS.md, LLM cost opt / 2026-08-02 budget).
  */
 export const EVENT_SONNET_TRIGGER_TYPES = [
   "friend_died",
   "bond_formed",
-  "bond_broken",
   "matured",
   "grew_old",
 ] as const;
 
-/** Частые событийные триггеры — дешёвая модель (Haiku), не Sonnet. */
-export const EVENT_HAIKU_TRIGGER_TYPES = ["birth", "hunt_success"] as const;
+/**
+ * Частые/шумные событийные триггеры — Haiku, не Sonnet.
+ * `bond_broken` раньше был на Sonnet и раздувал бюджет (тысячи эпизодов/сутки).
+ */
+export const EVENT_HAIKU_TRIGGER_TYPES = ["birth", "hunt_success", "bond_broken"] as const;
 
 export const EVENT_TRIGGER_TYPES = [...EVENT_SONNET_TRIGGER_TYPES, ...EVENT_HAIKU_TRIGGER_TYPES] as const;
 
@@ -83,7 +84,7 @@ export async function findDueBackgroundCandidates(pool: Pool): Promise<string[]>
 /**
  * Кандидаты на событийную рефлексию — упорядочены по возрасту САМОГО
  * СТАРОГО непоглощённого триггерного эпизода (FIFO): при упоре в глобальный
- * лимит (30/час, 120/сутки) первыми обслуживаются те, кто ждёт дольше всех,
+ * лимит (event_global_limit_per_*) первыми обслуживаются те, кто ждёт дольше всех,
  * а не случайный порядок.
  */
 export async function findDueEventCandidates(pool: Pool): Promise<string[]> {
@@ -117,7 +118,7 @@ export async function findDueEventCandidates(pool: Pool): Promise<string[]> {
     .map((r) => r.creature_id);
 }
 
-/** Считает событийные рефлексии за скользящее окно — для глобальных лимитов 30/час и 120/сутки (7.3). */
+/** Считает событийные рефлексии за скользящее окно — для глобальных лимитов (7.3). */
 export async function countRecentEventReflections(pool: Pool, hours: number): Promise<number> {
   const result = await pool.query<{ count: string }>(
     `SELECT count(*)::int AS count FROM reflections WHERE kind = 'event' AND created_at > now() - ($1::text || ' hours')::interval`,

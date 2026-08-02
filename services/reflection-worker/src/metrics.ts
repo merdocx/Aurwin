@@ -1,5 +1,6 @@
 import http from "node:http";
 import client from "prom-client";
+import { noteLlmSpend } from "./budgetGate.js";
 
 /**
  * Экспорт метрик LLM-рефлексии (ТЗ 6.1 "Метрики LLM", А.7, фаза 7
@@ -49,11 +50,12 @@ export interface LlmCallRecord {
   costUsd: number;
 }
 
-/** Вызывается из будущей реализации фазы 6 при каждом завершённом вызове Anthropic API. */
+/** Вызывается при каждом завершённом вызове Anthropic API. */
 export function recordLlmCall(record: LlmCallRecord): void {
   llmCalls.inc({ type: record.type, model: record.model, status: record.status });
   llmCostUsd.inc({ type: record.type, model: record.model }, record.costUsd);
   llmLatencySeconds.observe({ type: record.type, model: record.model }, record.latencySeconds);
+  noteLlmSpend(record.costUsd);
 }
 
 /** Экспортирован для тестов (services/reflection-worker/tests/metrics.test.ts). */

@@ -80,12 +80,44 @@ describe("validate.ts: контракт выхода А.5 — базовая ф�
     expect(result.ok).toBe(false);
   });
 
-  it("отклоняет effect с ключом вне белого списка", () => {
+  it("игнорирует effect с ключом вне белого списка (намерение с пустым effect)", () => {
     const result = validateReflectionResponse(
       validResponse({ intentions: [{ text: "x", effect: { betray_creature: { creature: "Пин", value: 1 } } }] }),
       baseCtx(),
     );
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
+    expect(result.value?.intentions[0].effect).toEqual({});
+  });
+
+  it("вырезает approach_bonus/avoid_creature на неизвестное существо, не валит ответ", () => {
+    const result = validateReflectionResponse(
+      validResponse({
+        intentions: [
+          {
+            text: "держаться Никиты и сторониться призрака",
+            effect: {
+              approach_bonus: { creature: "Никита", value: 0.3 },
+              avoid_creature: { creature: "Призрак", value: 0.5 },
+              zone_penalty: { north_bay: 0.2 },
+            },
+          },
+        ],
+      }),
+      baseCtx(),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.value?.intentions[0].effect.approach_bonus).toBeUndefined();
+    expect(result.value?.intentions[0].effect.avoid_creature).toBeUndefined();
+    expect(result.value?.intentions[0].effect.zone_penalty?.north_bay).toBeCloseTo(0.2, 6);
+  });
+
+  it("игнорирует неизвестные ключи effect (например голый value), оставляя намерение", () => {
+    const result = validateReflectionResponse(
+      validResponse({ intentions: [{ text: "просто жить", effect: { value: 0.5, zone_bonus: { main_ice: 0.1 } } }] }),
+      baseCtx(),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.value?.intentions[0].effect.zone_bonus?.main_ice).toBeCloseTo(0.1, 6);
   });
 
   it("отклоняет zone_penalty на несуществующую зону", () => {
@@ -94,15 +126,6 @@ describe("validate.ts: контракт выхода А.5 — базовая ф�
       baseCtx(),
     );
     expect(result.ok).toBe(false);
-  });
-
-  it("отклоняет approach_bonus на существо, которого нет во входных данных этого запроса (7.8.6/А.5)", () => {
-    const result = validateReflectionResponse(
-      validResponse({ intentions: [{ text: "держаться Никиты", effect: { approach_bonus: { creature: "Никита", value: 0.3 } } }] }),
-      baseCtx(),
-    );
-    expect(result.ok).toBe(false);
-    expect(result.errors.some((e) => e.includes("несуществующее существо"))).toBe(true);
   });
 
   it("разрешает approach_bonus на известное имя и резолвит его в id", () => {

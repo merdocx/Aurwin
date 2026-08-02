@@ -417,25 +417,6 @@ export const Creature = memo(function Creature({
           pointerEvents: "none",
         }}
       >
-        {!lod && state === "fleeing" && (
-          <div
-            style={{
-              position: "absolute",
-              top: -18,
-              left: 0,
-              transform: "translate(-50%,0)",
-              fontSize: 9,
-              fontFamily: "var(--font-mono)",
-              color: "var(--accent-danger)",
-              whiteSpace: "nowrap",
-              opacity: 0.9,
-              pointerEvents: "none",
-              zIndex: 3,
-            }}
-          >
-            бегство
-          </div>
-        )}
         {!lod && transit && (
           <div
             style={{

@@ -16,6 +16,8 @@ import {
   signalPulseKind,
 } from "./eventLabels";
 import { EventLog, buildLogEntries, type LogEntry } from "./EventLog";
+import { syncCreatureBubbles, type CreatureBubble } from "./creatureBubbles";
+import type { CreatureActivity } from "../ws/types";
 
 interface Props {
   store: WorldStore;
@@ -223,10 +225,56 @@ function EventBadge({ x, y, label, tone }: { x: number; y: number; label: string
   );
 }
 
+function CreatureSpeechBubble({
+  x,
+  y,
+  text,
+  kind,
+}: {
+  x: number;
+  y: number;
+  text: string;
+  kind: CreatureBubble["kind"];
+}) {
+  const thought = kind === "thought";
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: x,
+        top: y - (thought ? 42 : 28),
+        transform: "translate(-50%, -100%)",
+        zIndex: 5,
+        pointerEvents: "none",
+        maxWidth: thought ? 148 : 96,
+        padding: thought ? "5px 9px" : "3px 7px",
+        borderRadius: thought ? "12px 12px 12px 4px" : "10px",
+        background: "color-mix(in srgb, var(--bg-surface) 92%, transparent)",
+        border: "1px solid var(--border-subtle)",
+        fontFamily: "var(--font-sans)",
+        fontSize: thought ? 11 : 10,
+        lineHeight: 1.3,
+        color: thought ? "var(--fg-secondary)" : "var(--fg-tertiary)",
+        fontStyle: thought ? "italic" : "normal",
+        textAlign: "center",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        display: "-webkit-box",
+        WebkitLineClamp: thought ? 3 : 1,
+        WebkitBoxOrient: "vertical",
+        opacity: 0.95,
+      }}
+    >
+      {text}
+    </div>
+  );
+}
+
 export const ObservatoryWorld = memo(function ObservatoryWorld({ store, onSelectCreature, onViewportChange, focusCreatureId }: Props) {
   const [views, setViews] = useState<ViewCreature[]>([]);
   const [events, setEvents] = useState<TimedEvent[]>([]);
   const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
+  const [bubbles, setBubbles] = useState<CreatureBubble[]>([]);
   const [highlight, setHighlight] = useState<HighlightRing | null>(null);
   const [mapScale, setMapScale] = useState(1);
   const [fishOpacity, setFishOpacity] = useState(() => feedingFishOpacity(store.fishDensity));
@@ -235,12 +283,18 @@ export const ObservatoryWorld = memo(function ObservatoryWorld({ store, onSelect
   const lastMetaRev = useRef(-1);
   const lastEventIds = useRef("");
   const lastLogIds = useRef("");
+  const lastBubbleKey = useRef("");
   const lastFishDensityRevision = useRef(-1);
   const lastMountedKey = useRef("");
   const posCache = useRef(new Map<string, { x: number; y: number }>());
   const panZoomRef = useRef<PanZoomHandle>(null);
   const viewportMap = useRef<MapRect | null>(null);
   const highlightTimer = useRef<number | undefined>(undefined);
+  const bubbleMapRef = useRef(new Map<string, CreatureBubble>());
+  const prevActivityRef = useRef(new Map<string, CreatureActivity | undefined>());
+  const prevThoughtRef = useRef(new Map<string, string | undefined>());
+  const focusRef = useRef(focusCreatureId);
+  focusRef.current = focusCreatureId;
 
   const registerEl = useCallback((id: string, el: HTMLButtonElement | null) => {
     if (!el) {
@@ -389,6 +443,29 @@ export const ObservatoryWorld = memo(function ObservatoryWorld({ store, onSelect
           lastLogIds.current = logIds;
           setLogEntries(buildLogEntries(logEvents, (id) => store.creatureName(id)));
         }
+
+        const activities = new Map<string, CreatureActivity | undefined>();
+        const thoughts = new Map<string, string | undefined>();
+        for (const id of store.ids()) {
+          const m = store.getMeta(id);
+          if (!m) continue;
+          activities.set(id, m.activity);
+          thoughts.set(id, m.thought);
+        }
+        const nextBubbles = syncCreatureBubbles({
+          now,
+          bubbles: bubbleMapRef.current,
+          activities,
+          thoughts,
+          prevActivity: prevActivityRef.current,
+          prevThought: prevThoughtRef.current,
+          focusCreatureId: focusRef.current,
+        });
+        const bubbleKey = nextBubbles.map((b) => `${b.kind}:${b.creatureId}:${b.text}:${Math.floor(b.expiresAt)}`).join("|");
+        if (bubbleKey !== lastBubbleKey.current) {
+          lastBubbleKey.current = bubbleKey;
+          setBubbles(nextBubbles);
+        }
       }
       raf = requestAnimationFrame(loop);
     }
@@ -496,6 +573,20 @@ export const ObservatoryWorld = memo(function ObservatoryWorld({ store, onSelect
             if (!badgePos) return null;
             return <EventBadge key={e.id} x={badgePos.x} y={badgePos.y} label={info.label} tone={info.tone} />;
           })}
+          {!simplified &&
+            bubbles.map((b) => {
+              const pos = posCache.current.get(b.creatureId);
+              if (!pos) return null;
+              return (
+                <CreatureSpeechBubble
+                  key={`${b.kind}:${b.creatureId}:${b.startedAt}`}
+                  x={pos.x}
+                  y={pos.y}
+                  text={b.text}
+                  kind={b.kind}
+                />
+              );
+            })}
           {highlight && (
             <div
               key={`hl-${highlight.nonce}`}

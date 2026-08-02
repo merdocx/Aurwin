@@ -214,9 +214,9 @@ export function modelFor(kind: ReflectionKind): string {
 }
 
 /**
- * Модель для событийной рефлексии: Sonnet для вех/потерь/bonds; Haiku для
- * частых birth/hunt_success. Если в слитом окне есть хотя бы один
- * Sonnet-триггер — берём Sonnet (качество важнее экономии на смеси).
+ * Модель для событийной рефлексии: Sonnet для вех/потерь/начала дружбы;
+ * Haiku для birth/hunt_success/bond_broken. Если в слитом окне есть хотя
+ * бы один Sonnet-триггер — берём Sonnet.
  */
 export function modelForEvent(episodeTypes: readonly string[]): string {
   const sonnetTriggers: readonly string[] = EVENT_SONNET_TRIGGER_TYPES;

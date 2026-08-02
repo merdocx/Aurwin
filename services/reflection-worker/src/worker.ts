@@ -1,6 +1,7 @@
 import type { Pool } from "pg";
 import { estimateCostUsd, modelFor, modelForEvent, type AnthropicTransport } from "./anthropic.js";
 import { applyReflectionResult } from "./apply.js";
+import { isLlmDailyBudgetExceeded, llmSpendLast24hUsd } from "./budgetGate.js";
 import { getConstants } from "./constants.js";
 import { fetchPendingQueuedReflections, fetchWorldTick, markReflectionFailed, markReflectionSent, type QueuedReflectionRow } from "./db.js";
 import { recordLlmCall } from "./metrics.js";
@@ -284,13 +285,25 @@ export class ReflectionWorker {
       tally(await this.processSentRecovery(row));
     }
 
+    if (isLlmDailyBudgetExceeded()) {
+      const budget = getConstants().reflection.llm_daily_budget_usd;
+      console.warn(
+        `[reflection-worker] суточный бюджет LLM исчерпан (spent≈$${llmSpendLast24hUsd().toFixed(3)} ≥ $${budget}) — queued без новых вызовов`,
+      );
+      return summary;
+    }
+
     const queued = eligible.filter((r) => r.status === "queued");
     for (const row of queued.filter((r) => r.kind === "event")) {
+      if (isLlmDailyBudgetExceeded()) break;
       tally(await this.processEvent(row));
     }
 
-    const backgroundOutcomes = await this.processBackgroundBatch(queued.filter((r) => r.kind === "background"));
-    for (const outcome of backgroundOutcomes.values()) tally(outcome);
+    const bgQueued = queued.filter((r) => r.kind === "background");
+    if (bgQueued.length > 0 && !isLlmDailyBudgetExceeded()) {
+      const backgroundOutcomes = await this.processBackgroundBatch(bgQueued);
+      for (const outcome of backgroundOutcomes.values()) tally(outcome);
+    }
 
     return summary;
   }

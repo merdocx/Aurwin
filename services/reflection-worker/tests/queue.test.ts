@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { ensureMigratedUp, getTestPool, insertCreature } from "../../db/tests/helpers.js";
+import { getConstants } from "../src/constants.js";
 import { countRecentEventReflections, findDueBackgroundCandidates, findDueEventCandidates, fetchUnconsumedEpisodes } from "../src/db.js";
 import { selectCandidates } from "../src/queue.js";
 
@@ -30,7 +31,7 @@ describe("queue.ts: отбор кандидатов (7.3) — дебаунс, с
     await ensureMigratedUp();
   });
 
-  it("findDueEventCandidates: существо с недавней событийной рефлексией НЕ считается due (дебаунс 4ч)", async () => {
+  it("findDueEventCandidates: существо с недавней событийной рефлексией НЕ считается due (дебаунс)", async () => {
     const pool = getTestPool();
     await ensureAdultWorldTick(pool);
     const creatureId = await insertCreature(pool, { species: "penguin" });
@@ -122,7 +123,7 @@ describe("queue.ts: отбор кандидатов (7.3) — дебаунс, с
     expect(lastHour).toBeLessThan(last3Hours);
   });
 
-  it("selectCandidates: глобальный часовой лимит (30/час) режет число событийных вызовов, отдавая приоритет дольше всех ждущим", async () => {
+  it("selectCandidates: глобальный часовой лимит режет число событийных вызовов, отдавая приоритет дольше всех ждущим", async () => {
     const pool = getTestPool();
     await ensureAdultWorldTick(pool);
 
@@ -130,7 +131,7 @@ describe("queue.ts: отбор кандидатов (7.3) — дебаунс, с
     // эфемерный Postgres, без сброса между it()) — считаем ТЕКУЩИЙ расход и
     // добираем фиктивными рефлексиями ровно до (лимит - 2), чтобы бюджет,
     // оставшийся для наших 5 тестовых существ, был предсказуемо равен 2.
-    const HOURLY_LIMIT = 30;
+    const HOURLY_LIMIT = getConstants().reflection.event_global_limit_per_hour;
     const alreadyUsed = await countRecentEventReflections(pool, 1);
     const limitFiller = await insertCreature(pool, { species: "penguin" });
     const toFill = HOURLY_LIMIT - 2 - alreadyUsed;
@@ -150,7 +151,7 @@ describe("queue.ts: отбор кандидатов (7.3) — дебаунс, с
 
     const selected = await selectCandidates(pool);
     const selectedForOurCreatures = selected.filter((s) => creatureIds.includes(s.candidate.creatureId));
-    // Остался бюджет ровно 2 (30 - 28) в часовом окне — суточный лимит (120) не бьёт первым.
+    // Остался бюджет ровно 2 в часовом окне — суточный лимит не бьёт первым.
     expect(selectedForOurCreatures.length).toBe(2);
     // Приоритет — самым старым ожидающим эпизодам (i=0 и i=1, у которых created_at самый ранний).
     expect(selectedForOurCreatures.map((s) => s.candidate.creatureId)).toEqual([creatureIds[0], creatureIds[1]]);

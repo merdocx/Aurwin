@@ -34,6 +34,7 @@ export interface CreatureMeta {
   is_asleep: boolean;
   moving: boolean;
   activity?: CreatureActivity;
+  thought?: string;
 }
 
 export interface TimedEvent extends WorldEventDto {
@@ -145,6 +146,7 @@ export class WorldStore {
       is_asleep: frame.dto.is_asleep,
       moving,
       activity: frame.dto.activity,
+      thought: frame.dto.thought,
     };
   }
 
@@ -266,6 +268,7 @@ export class WorldStore {
           prevDto.is_asleep !== dto.is_asleep ||
           prevDto.name !== dto.name ||
           prevDto.activity !== dto.activity ||
+          prevDto.thought !== dto.thought ||
           emotionChanged
         ) {
           metaChanged = true;
@@ -354,6 +357,7 @@ export class WorldStore {
         is_asleep: frame.dto.is_asleep,
         moving,
         activity: frame.dto.activity,
+        thought: frame.dto.thought,
       });
     }
     return out;

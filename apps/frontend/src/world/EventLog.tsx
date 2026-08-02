@@ -1,5 +1,5 @@
 import type { TimedEvent } from "../ws/WorldStore";
-import { eventInfo, eventLogLabel } from "./eventLabels";
+import { eventInfo, eventLogLabel, isKeyLogEvent } from "./eventLabels";
 
 export interface LogEntry {
   id: string;
@@ -17,7 +17,6 @@ interface Props {
 
 /** Правая верхняя лента событий наблюдателя (порт дизайн-кита). */
 export function EventLog({ entries, onSelect }: Props) {
-  if (entries.length === 0) return null;
   return (
     <div
       className="observatory__event-log"
@@ -34,41 +33,72 @@ export function EventLog({ entries, onSelect }: Props) {
       }}
       aria-label="лента событий"
     >
-      {entries.map((e) => (
-        <button
-          key={e.id}
-          type="button"
-          onClick={() => onSelect(e)}
+      <div
+        style={{
+          fontSize: 10,
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+          color: "var(--fg-tertiary)",
+          fontFamily: "var(--font-sans)",
+          padding: "0 2px",
+          opacity: 0.85,
+        }}
+      >
+        события
+      </div>
+      {entries.length === 0 ? (
+        <div
           style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
             background: "var(--bg-surface)",
             border: "1px solid var(--border-subtle)",
             borderRadius: "var(--radius-m)",
-            padding: "6px 10px",
-            boxShadow: "var(--shadow-s)",
+            padding: "8px 10px",
             fontSize: 12,
-            color: "var(--fg-secondary)",
-            cursor: "pointer",
-            textAlign: "left",
+            color: "var(--fg-tertiary)",
             fontFamily: "var(--font-sans)",
-            pointerEvents: "auto",
             lineHeight: 1.35,
+            opacity: 0.7,
           }}
         >
-          <span
+          тихо…
+        </div>
+      ) : (
+        entries.map((e) => (
+          <button
+            key={e.id}
+            type="button"
+            onClick={() => onSelect(e)}
             style={{
-              width: 8,
-              height: 8,
-              borderRadius: "50%",
-              background: e.tone,
-              flex: "none",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              background: "var(--bg-surface)",
+              border: "1px solid var(--border-subtle)",
+              borderRadius: "var(--radius-m)",
+              padding: "6px 10px",
+              boxShadow: "var(--shadow-s)",
+              fontSize: 12,
+              color: "var(--fg-secondary)",
+              cursor: "pointer",
+              textAlign: "left",
+              fontFamily: "var(--font-sans)",
+              pointerEvents: "auto",
+              lineHeight: 1.35,
             }}
-          />
-          <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{e.text}</span>
-        </button>
-      ))}
+          >
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                background: e.tone,
+                flex: "none",
+              }}
+            />
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{e.text}</span>
+          </button>
+        ))
+      )}
     </div>
   );
 }
@@ -80,14 +110,17 @@ export function buildLogEntries(
   nameOf: (id: string) => string | undefined,
 ): LogEntry[] {
   const out: LogEntry[] = [];
-  // Newest first; skip duplicates by id.
+  // Newest first; skip duplicates by id; only key events.
   const seen = new Set<string>();
   for (let i = events.length - 1; i >= 0 && out.length < MAX_LOG; i--) {
     const e = events[i]!;
     if (seen.has(e.id)) continue;
     seen.add(e.id);
+    if (!isKeyLogEvent(e.type, e.payload)) continue;
     const label = eventLogLabel(e.type, e.payload);
-    const info = eventInfo(e.type === "signal_sent" && typeof e.payload.signalType === "string" ? e.payload.signalType : e.type);
+    const infoKey =
+      e.type === "signal_sent" && typeof e.payload.signalType === "string" ? e.payload.signalType : e.type;
+    const info = eventInfo(infoKey);
     const tone = info?.tone ?? "var(--fg-tertiary)";
     const actorName = e.actor_id ? nameOf(e.actor_id) : undefined;
     const text = actorName ? `${actorName} — ${label}` : label;

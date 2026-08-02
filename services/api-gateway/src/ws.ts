@@ -4,7 +4,13 @@ import { WebSocketServer, WebSocket } from "ws";
 import { getConstants, type GatewayConstants } from "./config.js";
 import { zoneLayout } from "./zones.js";
 import { ageStageFor, ageWeeksAt } from "./age.js";
-import { getAliveCreaturesLight, getWorldClock, getWorldEventsSinceTick, type LiveCreatureRow } from "./queries.js";
+import {
+  getAliveCreaturesLight,
+  getMaxWorldEventTick,
+  getWorldClock,
+  getWorldEventsSinceTick,
+  type LiveCreatureRow,
+} from "./queries.js";
 import { WsConnectionLimiter, WsMessageRateLimiter } from "./rateLimit.js";
 import { clientIp } from "./ip.js";
 
@@ -43,8 +49,18 @@ interface ClientState {
   msgLimiter: WsMessageRateLimiter;
 }
 
+const THOUGHT_MAX_CHARS = 48;
+
+function truncateThought(text: string | null | undefined): string | undefined {
+  if (!text) return undefined;
+  const t = text.trim();
+  if (!t) return undefined;
+  return t.length > THOUGHT_MAX_CHARS ? `${t.slice(0, THOUGHT_MAX_CHARS - 1)}…` : t;
+}
+
 function creatureDto(row: LiveCreatureRow, currentTick: number, visualTickSeconds: number) {
   const ageWeeks = ageWeeksAt(Number(row.born_at_tick), currentTick, visualTickSeconds);
+  const thought = truncateThought(row.thought);
   return {
     id: row.id,
     species: row.species,
@@ -56,6 +72,7 @@ function creatureDto(row: LiveCreatureRow, currentTick: number, visualTickSecond
     is_asleep: row.is_asleep,
     activity: row.activity ?? "idle",
     age_band: ageStageFor(row.species, ageWeeks),
+    ...(thought ? { thought } : {}),
   };
 }
 
@@ -71,6 +88,7 @@ function creatureFingerprint(row: LiveCreatureRow): string {
     Number(e.valence).toFixed(2),
     Number(e.arousal).toFixed(2),
     row.name,
+    row.thought ?? "",
   ].join("|");
 }
 
@@ -101,7 +119,19 @@ class GatewayHub {
     this.limiter = new WsConnectionLimiter(this.constants.api.ws_max_connections_per_ip, this.constants.api.ws_max_total_connections);
   }
 
+  /** Выставить курсор событий на MAX(tick), чтобы после рестарта не реплеить историю и не залипать. */
+  async seedEventCursor(): Promise<void> {
+    try {
+      this.lastEventTick = await getMaxWorldEventTick(this.pool);
+      this.lastEventId = "00000000-0000-0000-0000-000000000000";
+      console.info(`[api-gateway] event cursor seeded at tick=${this.lastEventTick}`);
+    } catch (err) {
+      console.error("[api-gateway] не удалось seed event cursor:", err);
+    }
+  }
+
   attach(httpServer: HttpServer): void {
+    void this.seedEventCursor();
     httpServer.on("upgrade", (req, socket, head) => {
       if (req.url !== "/ws" && !req.url?.startsWith("/ws?")) {
         socket.destroy();

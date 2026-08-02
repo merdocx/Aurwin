@@ -904,15 +904,36 @@ THIRD_LAND, MEDIUM_SEEDS, SMALL_BERGS. Именованные зоны — мя�
    (`snapshot_interval_ticks`). Между полными снапшотами возможна потеря
    ≤ ~1 минуты (как и для прочих полей полного снапшота).
 
+## 2026-08-02 — LLM budget hard stop + bond_broken → Haiku
+
+После перерасхода ~$4.7/сутки (план $0.40) при N≈11:
+
+1. **`bond_broken` → Haiku** (убран из `EVENT_SONNET_TRIGGER_TYPES`).
+   Шум разрывов дружбы больше не тянет Sonnet; `bond_formed` /
+   `friend_died` / возрастные вехи остаются на Sonnet.
+
+2. **Валидация: битый `avoid_creature` / `approach_bonus` / `hunt_with`
+   и неизвестные ключи effect вырезаются**, ответ применяется. Раньше
+   fail+retry удваивал платные Sonnet-вызовы на мёртвых ссылках.
+
+3. **Лимиты ужесточены:** `event_debounce_hours` 4→6,
+   `event_global_limit_per_hour` 30→10, `event_global_limit_per_day` 120→40.
+
+4. **Жёсткий стоп `llm_daily_budget_usd` ($0.40):** in-memory окно 24ч
+   (`budgetGate.ts`); при превышении не ставятся новые кандидаты и не
+   идут новые LLM-вызовы (recovery `sent` без LLM — да). После рестарта
+   воркера окно пустое — основной потолок тогда event-капы в БД.
+
 ## 2026-07-31 — LLM cost optimizations (reflection-worker)
 
 Отклонения/уточнения к 7.3/7.6 ради бюджета (~$0.40/день):
 
-1. **Событийная модель не всегда Sonnet.** `birth` и `hunt_success` →
-   Haiku (`models.background`); Sonnet остаётся для `friend_died`,
-   `bond_formed`, `bond_broken`, `matured`, `grew_old`. При слиянии окна
+1. **Событийная модель не всегда Sonnet.** `birth`, `hunt_success` и
+   `bond_broken` → Haiku (`models.background`); Sonnet остаётся для
+   `friend_died`, `bond_formed`, `matured`, `grew_old`. При слиянии окна
    с хотя бы одним Sonnet-триггером — Sonnet. См.
    `EVENT_HAIKU_TRIGGER_TYPES` / `modelForEvent` в reflection-worker.
+   (Уточнение 2026-08-02: `bond_broken` переведён с Sonnet на Haiku.)
 
 2. **Пустой фон пропускается.** Если у due-кандидата нет unconsumed
    эпизодов — LLM не вызывается; пишется `reflections` со статусом

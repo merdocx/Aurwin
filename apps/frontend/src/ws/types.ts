@@ -29,6 +29,8 @@ export interface CreatureDto {
   age_band: AgeBand;
   /** Режим для UI; опционален для старых payload. */
   activity?: CreatureActivity;
+  /** Короткая мысль (intentions[0]); только при смене — облачко на карте. */
+  thought?: string;
 }
 
 export interface ZoneDto {

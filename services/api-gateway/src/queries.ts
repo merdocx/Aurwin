@@ -36,15 +36,24 @@ export interface LiveCreatureRow {
   emotion: { valence: number; arousal: number };
   is_asleep: boolean;
   activity: string | null;
+  /** Первая intention (observer-safe); для облачка мысли на карте. */
+  thought: string | null;
   born_at_tick: string;
 }
 
 export async function getAliveCreaturesLight(pool: Pool): Promise<LiveCreatureRow[]> {
   const result = await pool.query<LiveCreatureRow>(
-    `SELECT id, species, name, pos_x, pos_y, zone, emotion, is_asleep, activity, born_at_tick
+    `SELECT id, species, name, pos_x, pos_y, zone, emotion, is_asleep, activity, born_at_tick,
+            NULLIF(BTRIM(intentions->0->>'text'), '') AS thought
      FROM creatures WHERE died_at_tick IS NULL`,
   );
   return result.rows;
+}
+
+/** Курсор WS world_events: стартовать с хвоста, без реплея истории. */
+export async function getMaxWorldEventTick(pool: Pool): Promise<number> {
+  const result = await pool.query<{ max: string }>(`SELECT COALESCE(MAX(tick), 0)::text AS max FROM world_events`);
+  return Number(result.rows[0]?.max ?? 0);
 }
 
 export interface WorldEventRow {

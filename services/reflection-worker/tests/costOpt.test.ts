@@ -3,10 +3,11 @@ import { estimateCostUsd, modelForEvent } from "../src/anthropic.js";
 import { getConstants } from "../src/constants.js";
 
 describe("LLM cost opt: model routing + batch accounting", () => {
-  it("modelForEvent: birth/hunt_success → Haiku; friend_died/bonds/vehi → Sonnet; смесь → Sonnet", () => {
+  it("modelForEvent: birth/hunt_success/bond_broken → Haiku; friend_died/bond_formed/vehi → Sonnet; смесь → Sonnet", () => {
     const { background, event } = getConstants().reflection.models;
     expect(modelForEvent(["birth"])).toBe(background);
     expect(modelForEvent(["hunt_success"])).toBe(background);
+    expect(modelForEvent(["bond_broken"])).toBe(background);
     expect(modelForEvent(["friend_died"])).toBe(event);
     expect(modelForEvent(["bond_formed"])).toBe(event);
     expect(modelForEvent(["matured", "birth"])).toBe(event);

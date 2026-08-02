@@ -255,16 +255,13 @@ export function validateReflectionResponse(raw: string, ctx: ValidationContext):
       }
       const rawEffect = item.effect as Record<string, unknown>;
       const effectKeys = Object.keys(rawEffect);
-      const unknownKeys = effectKeys.filter((k) => !(INTENTION_EFFECT_KEYS as readonly string[]).includes(k));
-      if (unknownKeys.length > 0) {
-        errors.push(`intentions[].effect: неизвестные ключи ${unknownKeys.join(", ")}`);
-        continue;
-      }
+      // Неизвестные ключи (часто голый `value`) — вырезаем, не валим весь ответ.
+      const knownKeys = effectKeys.filter((k) => (INTENTION_EFFECT_KEYS as readonly string[]).includes(k));
 
       const effect: ResolvedIntentionEffect = {};
       let intentionValid = true;
 
-      for (const key of effectKeys as IntentionEffectKey[]) {
+      for (const key of knownKeys as IntentionEffectKey[]) {
         if (key === "zone_penalty" || key === "zone_bonus") {
           const zones = rawEffect[key];
           if (typeof zones !== "object" || zones === null) {
@@ -285,13 +282,9 @@ export function validateReflectionResponse(raw: string, ctx: ValidationContext):
           if (!intentionValid) break;
           effect[key] = resolvedZones;
         } else if (key === "approach_bonus" || key === "avoid_creature") {
+          // Битая ссылка (мертвый/неизвестный id) — вырезаем ключ, намерение оставляем.
           const resolved = resolveCreatureRef(rawEffect[key], ctx);
-          if (!resolved) {
-            errors.push(`intentions[].effect.${key}: ссылка на несуществующее существо (7.8.6/А.5)`);
-            intentionValid = false;
-            break;
-          }
-          effect[key] = resolved;
+          if (resolved) effect[key] = resolved;
         } else if (key === "prefer_zone" || key === "avoid_zone") {
           const rawZone = rawEffect[key];
           const canonical = typeof rawZone === "string" ? canonicalizeZone(rawZone, ctx.knownZones) : undefined;
@@ -303,12 +296,7 @@ export function validateReflectionResponse(raw: string, ctx: ValidationContext):
           effect[key] = canonical;
         } else if (key === "hunt_with") {
           const creatureId = resolveCreatureId(rawEffect[key], ctx);
-          if (!creatureId) {
-            errors.push("intentions[].effect.hunt_with: ссылка на несуществующее существо (7.8.6/А.5)");
-            intentionValid = false;
-            break;
-          }
-          effect.hunt_with = creatureId;
+          if (creatureId) effect.hunt_with = creatureId;
         } else if (key === "seek_mate") {
           if (typeof rawEffect[key] !== "boolean") {
             errors.push("intentions[].effect.seek_mate: не boolean");
