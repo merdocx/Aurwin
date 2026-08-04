@@ -3,6 +3,7 @@ import { ObservatoryWorld } from "./world/ObservatoryWorld";
 import { useWorldClock, useWorldSocket } from "./ws/useWorldSocket";
 import { CreatureCardPanel } from "./components/CreatureCard";
 import { SocialGraph } from "./components/SocialGraph";
+import { GenealogyForest } from "./components/GenealogyForest";
 import { fetchWorldStats, type WorldStats } from "./api/client";
 import { Tabs } from "./ds/Tabs";
 import { Dialog } from "./ds/Dialog";
@@ -22,7 +23,7 @@ const HINT_KEY = "aurwin-observatory-hint-dismissed";
 export function App() {
   const { store, status, errorMessage, setViewport } = useWorldSocket();
   const { tick, phase } = useWorldClock(store);
-  const [tab, setTab] = useState<"world" | "social">("world");
+  const [tab, setTab] = useState<"world" | "social" | "genealogy">("world");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedName, setSelectedName] = useState("");
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -89,10 +90,11 @@ export function App() {
           </button>
           <Tabs
             value={tab}
-            onChange={(v) => setTab(v as "world" | "social")}
+            onChange={(v) => setTab(v as "world" | "social" | "genealogy")}
             items={[
               { value: "world", label: "Мир" },
               { value: "social", label: "Кто с кем дружит" },
+              { value: "genealogy", label: "Древо" },
             ]}
           />
         </div>
@@ -157,8 +159,10 @@ export function App() {
               </div>
             )}
           </>
-        ) : (
+        ) : tab === "social" ? (
           <SocialGraph onSelectCreature={onSelectCreature} active={tab === "social"} />
+        ) : (
+          <GenealogyForest onSelectCreature={onSelectCreature} active={tab === "genealogy"} />
         )}
       </main>
 

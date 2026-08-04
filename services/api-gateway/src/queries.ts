@@ -223,3 +223,24 @@ export async function getWorldStats(pool: Pool): Promise<WorldStats> {
     generation: generationResult.rows[0]?.max_generation ?? 0,
   };
 }
+
+export interface GenealogyNode {
+  id: string;
+  species: "penguin" | "orca";
+  name: string;
+  sex: "m" | "f";
+  born_at_tick: string;
+  died_at_tick: string | null;
+  parent_a: string | null;
+  parent_b: string | null;
+}
+
+/** Все существа (живые и мёртвые) с родителями — для вкладки «Древо». Без narrative. */
+export async function getGenealogy(pool: Pool): Promise<{ nodes: GenealogyNode[] }> {
+  const result = await pool.query<GenealogyNode>(
+    `SELECT id, species, name, sex, born_at_tick, died_at_tick, parent_a, parent_b
+     FROM creatures
+     ORDER BY born_at_tick ASC, name ASC`,
+  );
+  return { nodes: result.rows };
+}

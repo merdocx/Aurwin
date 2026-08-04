@@ -30,6 +30,22 @@ export interface SocialGraph {
   edges: Array<{ a: string; b: string; strength: number; kind: "friend" | "mate" | "kin" }>;
 }
 
+export interface GenealogyNode {
+  id: string;
+  species: "penguin" | "orca";
+  name: string;
+  sex: "m" | "f";
+  born_at_tick: number;
+  died_at_tick: number | null;
+  parent_a: string | null;
+  parent_b: string | null;
+  alive: boolean;
+}
+
+export interface Genealogy {
+  nodes: GenealogyNode[];
+}
+
 export interface WorldStats {
   tick: number;
   phase: "day" | "night";
@@ -58,6 +74,10 @@ export function fetchCreatureCard(id: string): Promise<CreatureCard> {
 
 export function fetchSocialGraph(): Promise<SocialGraph> {
   return getJson(`/api/social-graph`);
+}
+
+export function fetchGenealogy(): Promise<Genealogy> {
+  return getJson(`/api/genealogy`);
 }
 
 export function fetchWorldStats(): Promise<WorldStats> {

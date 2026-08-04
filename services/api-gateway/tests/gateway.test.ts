@@ -107,6 +107,27 @@ describe("api-gateway: narrative никогда не отдаётся публи
     expect(Array.isArray(body.edges)).toBe(true);
   });
 
+  it("GET /api/genealogy отдаёт живых и мёртвых без narrative", async () => {
+    const pool = getTestPool();
+    const { server, baseUrl } = await startServer(pool);
+    activeServer = server;
+
+    const res = await fetch(`${baseUrl}/api/genealogy`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(containsNarrativeKey(body)).toBe(false);
+    expect(Array.isArray(body.nodes)).toBe(true);
+    expect(body).not.toHaveProperty("edges");
+    if (body.nodes.length > 0) {
+      const n = body.nodes[0];
+      expect(n).toHaveProperty("id");
+      expect(n).toHaveProperty("parent_a");
+      expect(n).toHaveProperty("parent_b");
+      expect(n).toHaveProperty("alive");
+      expect(typeof n.alive).toBe("boolean");
+    }
+  });
+
   it("GET /api/world/stats не содержит narrative", async () => {
     const pool = getTestPool();
     const { server, baseUrl } = await startServer(pool);

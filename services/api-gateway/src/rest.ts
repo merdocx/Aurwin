@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import { getConstants } from "./config.js";
 import { ageStageFor, ageWeeksAt } from "./age.js";
 import { sendJson } from "./http.js";
-import { getCreatureCard, getCreatureTimeline, getSocialGraph, getWorldClock, getWorldStats, type WorldEventRow } from "./queries.js";
+import { getCreatureCard, getCreatureTimeline, getGenealogy, getSocialGraph, getWorldClock, getWorldStats, type WorldEventRow } from "./queries.js";
 
 /**
  * REST (read-only, публичный, А.6). Как и queries.ts — ни один обработчик
@@ -87,6 +87,7 @@ interface SocialGraphCacheEntry {
 }
 
 let socialGraphCache: SocialGraphCacheEntry | undefined;
+let genealogyCache: SocialGraphCacheEntry | undefined;
 
 export async function handleSocialGraph(res: ServerResponse, pool: Pool): Promise<void> {
   const now = Date.now();
@@ -100,9 +101,34 @@ export async function handleSocialGraph(res: ServerResponse, pool: Pool): Promis
   sendJson(res, 200, body);
 }
 
+export async function handleGenealogy(res: ServerResponse, pool: Pool): Promise<void> {
+  const now = Date.now();
+  if (genealogyCache && genealogyCache.expiresAt > now) {
+    sendJson(res, 200, genealogyCache.body);
+    return;
+  }
+  const data = await getGenealogy(pool);
+  const body = {
+    nodes: data.nodes.map((n) => ({
+      id: n.id,
+      species: n.species,
+      name: n.name,
+      sex: n.sex,
+      born_at_tick: Number(n.born_at_tick),
+      died_at_tick: n.died_at_tick === null ? null : Number(n.died_at_tick),
+      parent_a: n.parent_a,
+      parent_b: n.parent_b,
+      alive: n.died_at_tick === null,
+    })),
+  };
+  genealogyCache = { body, expiresAt: now + getConstants().api.social_graph_cache_seconds * 1000 };
+  sendJson(res, 200, body);
+}
+
 /** Только для тестов. */
 export function resetSocialGraphCache(): void {
   socialGraphCache = undefined;
+  genealogyCache = undefined;
 }
 
 export async function handleWorldStats(res: ServerResponse, pool: Pool): Promise<void> {
