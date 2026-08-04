@@ -282,84 +282,200 @@ body,
   font-family: var(--font-sans);
 }
 
-.genealogy-forest {
+.genealogy-view {
   height: 100%;
   display: flex;
   flex-direction: column;
-  padding: 16px 24px 24px;
+  padding: 20px 24px 24px;
+  gap: 14px;
   overflow: hidden;
   background: var(--bg-canvas);
 }
 
-.genealogy-forest--loading,
-.genealogy-forest--empty {
-  color: var(--fg-tertiary);
-  padding: 24px;
+.genealogy-view__intro h2 {
+  margin: 0 0 6px;
+  font-size: var(--text-heading-m);
+  color: var(--fg-primary);
+  font-family: var(--font-serif, var(--font-sans));
+  font-weight: 500;
 }
 
-.genealogy-forest__section-label {
-  font-family: var(--font-sans);
+.genealogy-view__intro p {
+  margin: 0;
+  max-width: 62ch;
+  color: var(--fg-tertiary);
   font-size: var(--text-body-s);
-  font-weight: 600;
+  line-height: 1.45;
+}
+
+.genealogy-view__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.genealogy-view__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
   color: var(--fg-secondary);
-  letter-spacing: 0.02em;
+}
+
+.genealogy-view__swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  display: inline-block;
+  box-sizing: border-box;
+}
+
+.genealogy-view__swatch--live {
+  background: var(--ice-100);
+  border: 2px solid var(--aurora-teal-500);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--aurora-teal-500) 25%, transparent);
+}
+
+.genealogy-view__swatch--dead {
+  background: color-mix(in oklch, var(--bg-surface) 80%, var(--fg-tertiary));
+  border: 1px dashed var(--border-subtle);
+  opacity: 0.85;
+}
+
+.genealogy-view__swatch--mate {
+  width: 18px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--coral-400, #e07a5f);
+}
+
+.genealogy-view__swatch--kin {
+  width: 18px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--aurora-teal-500);
+  opacity: 0.7;
+}
+
+.genealogy-view__loading {
+  color: var(--fg-tertiary);
+  margin: 0;
+}
+
+.genealogy-view__canvas {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-l);
+  box-shadow: var(--shadow-s);
+  overflow-x: hidden;
+  overflow-y: auto;
+  background:
+    radial-gradient(ellipse 70% 50% at 50% 0%, color-mix(in oklch, var(--aurora-teal-500) 10%, transparent), transparent 70%),
+    var(--navy-700, var(--bg-surface));
+}
+
+.genealogy-forest__scene {
+  position: relative;
+  margin: 0 auto;
+}
+
+.genealogy-forest__svg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.genealogy-forest__title {
+  fill: var(--fg-secondary);
+  font-family: var(--font-serif, var(--font-sans));
+  font-size: 14px;
+  letter-spacing: 0.04em;
+}
+
+.genealogy-forest__divider {
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+  stroke-dasharray: 4 8;
+  opacity: 0.7;
+}
+
+.genealogy-forest__edge {
+  stroke: var(--aurora-teal-500);
+  stroke-width: 1.25;
+  opacity: 0.5;
+}
+
+.genealogy-forest__edge--mate {
+  stroke: var(--coral-400, #e07a5f);
+  stroke-width: 1.4;
+  opacity: 0.7;
 }
 
 .genealogy-forest__node {
+  position: absolute;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  padding: 0 8px;
-  border: 1px solid var(--aurora-teal-500);
-  border-radius: var(--radius-m);
-  background: var(--ice-100);
-  color: var(--fg-primary);
+  gap: 3px;
+  padding: 0 6px;
+  border-radius: 999px;
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: 10px;
   cursor: pointer;
-  box-shadow: var(--shadow-s);
   overflow: hidden;
-}
-
-.genealogy-forest__node--orca {
-  background: var(--navy-800);
-  color: var(--ice-100);
-  border-color: var(--aurora-teal-500);
-}
-
-.genealogy-forest__node--orca .genealogy-forest__meta {
-  color: var(--ice-200, var(--fg-secondary));
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  z-index: 1;
 }
 
 .genealogy-forest__node:hover,
 .genealogy-forest__node:focus-visible {
-  outline: 2px solid var(--aurora-teal-500);
-  outline-offset: 1px;
+  transform: translateY(-1px) scale(1.05);
+  z-index: 2;
+  outline: none;
+}
+
+.genealogy-forest__node--penguin.genealogy-forest__node--live {
+  background: var(--ice-100);
+  color: var(--navy-800, var(--fg-primary));
+  border: 1px solid var(--aurora-teal-500);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--aurora-teal-500) 16%, transparent);
+}
+
+.genealogy-forest__node--orca.genealogy-forest__node--live {
+  background: color-mix(in oklch, var(--navy-800) 92%, var(--aurora-teal-500));
+  color: var(--ice-100);
+  border: 1px solid color-mix(in oklch, var(--aurora-teal-500) 80%, white);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--aurora-teal-500) 18%, transparent);
 }
 
 .genealogy-forest__node--dead {
-  background: var(--bg-surface);
-  border-color: var(--border-subtle);
+  background: color-mix(in oklch, var(--bg-surface) 70%, transparent);
   color: var(--fg-tertiary);
-  opacity: 0.72;
+  border: 1px dashed color-mix(in oklch, var(--fg-tertiary) 45%, transparent);
+  box-shadow: none;
+  opacity: 0.78;
+}
+
+.genealogy-forest__node--orca.genealogy-forest__node--dead {
+  background: color-mix(in oklch, var(--navy-800) 55%, transparent);
+  color: color-mix(in oklch, var(--ice-100) 55%, transparent);
 }
 
 .genealogy-forest__name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 72px;
+  max-width: 42px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
 .genealogy-forest__meta {
   flex-shrink: 0;
-  font-size: 11px;
-  color: var(--fg-secondary);
-}
-
-.genealogy-forest__node--dead .genealogy-forest__meta {
-  color: var(--fg-tertiary);
+  font-size: 9px;
+  opacity: 0.85;
 }
 
 @media (max-width: 720px) {

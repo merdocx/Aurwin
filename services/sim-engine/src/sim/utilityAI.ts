@@ -92,6 +92,45 @@ function intentionTerm(creature: Creature, action: string, zone: ZoneName | unde
   return total;
 }
 
+/** Текст эвристического намерения «искать пару» (без LLM). */
+export const HEURISTIC_SEEK_MATE_TEXT = "искать пару";
+
+/**
+ * Без LLM: взрослый + сильный друг противоположного пола + низкий голод →
+ * intention seek_mate (бонус court в intentionTerm). Не затирает прочие
+ * intentions — только этот маркер.
+ */
+export function syncHeuristicMateIntentions(
+  creature: Creature,
+  visible: Creature[],
+  bondStrength: (id: string) => number,
+  currentTick: number,
+): void {
+  creature.intentions = creature.intentions.filter((i) => i.text !== HEURISTIC_SEEK_MATE_TEXT);
+  const constants = getSimConstants();
+  const ageStage = ageStageFor(creature.species, ageWeeksAt(creature.bornAtTick, currentTick));
+  if (ageStage !== "adult") return;
+  if (creature.needs.hunger > constants.reproduction.max_hunger_to_mate) return;
+  const friendThresh = constants.social.friendship.threshold;
+  const hasStrongFriend = visible.some((other) => {
+    if (other.sex === creature.sex) return false;
+    if (other.species !== creature.species) return false;
+    const otherStage = ageStageFor(other.species, ageWeeksAt(other.bornAtTick, currentTick));
+    if (otherStage !== "adult") return false;
+    if (isForbiddenPair(creature, other)) return false;
+    return bondStrength(other.id) >= friendThresh;
+  });
+  if (!hasStrongFriend) return;
+  creature.intentions.push({ text: HEURISTIC_SEEK_MATE_TEXT, effect: { seek_mate: true } });
+}
+
+function courtSatiationBonus(self: Creature, target: Creature): number {
+  const maxHunger = getSimConstants().reproduction.max_hunger_to_mate;
+  if (self.needs.hunger > maxHunger) return 0;
+  if (target.needs.hunger > maxHunger) return 0.15; // сам сыт, партнёр ещё нет — слабый интерес
+  return 0.4; // оба сыты — окно ухаживания
+}
+
 interface Candidate {
   name: string;
   targetId?: string;
@@ -435,6 +474,7 @@ function decidePenguinActions(
     }
 
     if (ageStage === "adult") {
+      const friendThresh = constants.social.friendship.threshold;
       let bestMate: Creature | undefined;
       let bestMateScore = -Infinity;
       for (const other of penguinsVisible) {
@@ -442,7 +482,10 @@ function decidePenguinActions(
         const otherAgeStage = ageStageFor(other.species, ageWeeksAt(other.bornAtTick, currentTick));
         if (otherAgeStage !== "adult") continue;
         if (isForbiddenPair(creature, other)) continue;
-        const score = bondStrength(other.id) - aversionStrength(other.id);
+        const rawBond = bondStrength(other.id);
+        // Court только после дружбы — иначе court_rejected → aversion.
+        if (rawBond < friendThresh) continue;
+        const score = rawBond - aversionStrength(other.id);
         if (score > bestMateScore) {
           bestMateScore = score;
           bestMate = other;
@@ -456,7 +499,8 @@ function decidePenguinActions(
             bestMate.id,
             {
               trait: traitTerm(creature, (t) => t.sociability * 0.3 + t.aggression * 0.1 + t.courage * 0.1),
-              bond: bondStrength(bestMate.id) * 0.5,
+              bond: bondStrength(bestMate.id) * 0.65,
+              satiation: courtSatiationBonus(creature, bestMate),
               intention: intentionTerm(creature, "court", undefined, bestMate.id, true),
               predator_nearby: socialPredatorPenalty,
             },
@@ -689,6 +733,7 @@ function decideOrcaActions(
     );
 
     if (ageStage === "adult") {
+      const friendThresh = constants.social.friendship.threshold;
       let bestMate: Creature | undefined;
       let bestMateScore = -Infinity;
       for (const other of orcasVisible) {
@@ -696,7 +741,9 @@ function decideOrcaActions(
         const otherAgeStage = ageStageFor(other.species, ageWeeksAt(other.bornAtTick, currentTick));
         if (otherAgeStage !== "adult") continue;
         if (isForbiddenPair(creature, other)) continue;
-        const score = bondStrength(other.id);
+        const rawBond = bondStrength(other.id);
+        if (rawBond < friendThresh) continue;
+        const score = rawBond;
         if (score > bestMateScore) {
           bestMateScore = score;
           bestMate = other;
@@ -710,7 +757,9 @@ function decideOrcaActions(
             bestMate.id,
             {
               trait: traitTerm(creature, (t) => t.sociability * 0.3),
-              bond: bondStrength(bestMate.id) * 0.5,
+              bond: bondStrength(bestMate.id) * 0.65,
+              satiation: courtSatiationBonus(creature, bestMate),
+              intention: intentionTerm(creature, "court", undefined, bestMate.id, true),
             },
             rng,
             noiseMax,

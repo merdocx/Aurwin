@@ -44,7 +44,7 @@ export function App() {
         .catch(() => undefined);
     }
     load();
-    const id = window.setInterval(load, 15000);
+    const id = window.setInterval(load, 30000);
     return () => {
       cancelled = true;
       window.clearInterval(id);

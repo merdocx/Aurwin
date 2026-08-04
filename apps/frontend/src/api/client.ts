@@ -14,6 +14,14 @@ export interface CreatureCard {
   narrative_facts: string[];
   intentions: Array<{ text: string; effect?: Record<string, unknown> }>;
   habits: Record<string, number>;
+  mate: {
+    id: string;
+    name: string;
+    species: "penguin" | "orca";
+    sex: "m" | "f";
+    strength: number;
+    alive: boolean;
+  } | null;
   timeline: Array<{
     id: string;
     tick: number;

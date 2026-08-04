@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import { getConstants } from "./config.js";
 import { ageStageFor, ageWeeksAt } from "./age.js";
 import { sendJson } from "./http.js";
-import { getCreatureCard, getCreatureTimeline, getGenealogy, getSocialGraph, getWorldClock, getWorldStats, type WorldEventRow } from "./queries.js";
+import { getCreatureCard, getCreatureTimeline, getGenealogy, getMatePartner, getSocialGraph, getWorldClock, getWorldStats, type WorldEventRow } from "./queries.js";
 
 /**
  * REST (read-only, публичный, А.6). Как и queries.ts — ни один обработчик
@@ -48,7 +48,7 @@ export async function handleCreatureCard(res: ServerResponse, pool: Pool, id: st
     sendJson(res, 400, { error: "некорректный id" });
     return;
   }
-  const [card, clock] = await Promise.all([getCreatureCard(pool, id), getWorldClock(pool)]);
+  const [card, clock, mate] = await Promise.all([getCreatureCard(pool, id), getWorldClock(pool), getMatePartner(pool, id)]);
   if (!card) {
     sendJson(res, 404, { error: "существо не найдено" });
     return;
@@ -77,6 +77,16 @@ export async function handleCreatureCard(res: ServerResponse, pool: Pool, id: st
     narrative_facts: card.narrative_facts,
     intentions: observerIntentions(card.intentions),
     habits: observerHabits(card.habits),
+    mate: mate
+      ? {
+          id: mate.id,
+          name: mate.name,
+          species: mate.species,
+          sex: mate.sex,
+          strength: Number(mate.strength),
+          alive: mate.alive,
+        }
+      : null,
     timeline: timelineDto(timeline),
   });
 }
