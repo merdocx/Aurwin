@@ -410,3 +410,91 @@ Offline `--days 1 --fast` after tune:
 - seed 7: 20→20 (min 18), predation 3, attempts 15
 - seed 99: 20→17 (min 17), predation 6, attempts 28
 No wipe; min ≥ alert. Live restored on new constants (tick ~19938, 9 penguins).
+
+## 2026-08-04 — birth-only-mate + soft hunt nudge + repro throttle
+
+**Контекст.** Live ~5 пингвинов / 2 касатки (у нижней границы alert). Аудит:
+рождение шло при сильной `friend`-связи без `mate`; пара после рождения могла
+расстаться (это ок). Хищничество — почти единственный канал убыли.
+
+**Логика (не константа):** `processReproduction` принимает только
+`bond.kind === "mate"`. Пара по-прежнему через `court` → `mate_bonded`.
+Дружба больше не конвертируется в пару «через рождение».
+
+| Параметр | Было | Стало | Зачем |
+|----------|------|-------|-------|
+| base_hunt_success_probability | 0.32 | **0.28** | live тонкий; откатить при pop пингвинов >35 |
+| attempt_probability_per_tick | 0.02 | **0.01** | после mate-only — меньше взрывного роста |
+| cooldown_inner_days | 2 | **3** | тот же рычаг |
+
+Genesis counts не трогали (п.9).
+
+**Мониторинг 48h (ops):** births vs predation deaths / час; реинтродукция =
+стоп и разбор. Откат hunt P → 0.32 если пингвины стабильно >35 без давления
+касаток.
+
+Тесты: `services/sim-engine/tests/reproduction.test.ts`.
+Offline gate: `--days 7 --fast` затем `--days 30 --fast` (см. отчёт ниже / в
+`ops/reports/`).
+
+## 2026-08-04 — offline gate после mate-only + hunt 0.28 + repro throttle
+
+Отчёты: `ops/reports/balance-2026-08-04-7d.txt`, `ops/reports/balance-2026-08-04-30d.txt`
+(seed=42, `--fast`).
+
+### 7d
+- Pop: penguin 20→15 (min **1**), orca 2→2 (min 1)
+- Births: **0 / 0**
+- Deaths penguin: predation 11, age 13, starvation 1
+- Deaths orca: starvation **4**
+- Alert outside: **19.1%** ticks
+- Reintroductions: orca×2, penguin×1 → **провал баланса**
+
+### 30d
+- Pop: penguin 20→17 (min **1**), orca 2→1 (min 1)
+- Births: **0 / 0**
+- Deaths penguin: predation 21, age 56, starvation 6
+- Deaths orca: starvation **17**
+- Alert outside: **25.7%** ticks
+- Много реинтродукций обоих видов
+
+### Вывод
+1. `birth-only-mate` работает (0 рождений без устойчивых mate-пар) — но
+   **court→mate почти не замыкается**, репродуктивный контур «выключен».
+2. Hunt P **0.28** + низкий fish: касатки часто **голодают** (не predation
+   wipe пингвинов, а starvation orca) → реинтродукция orca.
+3. Следующие рычаги (не в этом патче): усилить utility `court` при сильной
+   дружбе / снизить порог court; чуть поднять hunt P (0.28→0.30) или fish
+   для сытости касаток; не ослаблять mate-only.
+
+Live мониторинг 48h при текущих константах всё ещё актуален (тонкая
+популяция ~5/2 на момент деплоя).
+
+## 2026-08-04 — realism roadmap: court/affiliation/eco + soft monogamy
+
+**Код (sim-engine / api-gateway / frontend):**
+- Court только при `bond ≥ friendship.threshold`; бонус сытости; эвристика
+  `seek_mate` (`syncHeuristicMateIntentions`); orca court + intentionTerm.
+- Affiliation: `social.bond_growth_per_tick_affiliation: 0.03` при взаимном
+  approach/socialize/court.
+- Soft monogamy: новый mate рвёт прочие mate → friend + `mate_breakup`.
+- Карточка: поле `mate` (id/name/sex/strength/alive).
+- Eco: fish 0.009/0.0035; night_fish 0.7; contact 18; notice 0.65;
+  reattempt 20 мин; solo group_defense 0.85. Hunt P остаётся **0.28**.
+
+**Offline verify** (`ops/reports/realism-2026-08-04-{3,7}d.txt`, seed=42):
+
+| Метрика | 3d | 7d |
+|---------|----|----|
+| Births penguin | **3** | **4** |
+| Reintro | **0** | orca×1 |
+| Alert outside | **0%** | 51.2% |
+| Penguin end (min) | 8 (8) | 1 (1) |
+| Orca deaths | 0 | starvation 2 |
+| Penguin deaths | pred 10 / age 4 / starv 1 | pred 17 / age 4 / starv 2 |
+
+**Вывод:** репродуктивный контур снова жив (births > 0 при mate-only).
+3d — чистый проход критериев. 7d — рождаемость есть, но усиленная геометрия
+охоты + fish дала сильный predation drain и один orca-reintro; следующий
+микро-рычаг при необходимости: notice 0.65→0.70 или contact 18→17 (не трогая
+mate-only / court).

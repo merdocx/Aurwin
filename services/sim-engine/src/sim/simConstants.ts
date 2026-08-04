@@ -72,6 +72,8 @@ export interface SimConstants {
   social: {
     friendship: { threshold: number; decay_below: number };
     bond_growth_per_tick_within_radius: number;
+    /** Доп. рост при взаимном approach/socialize/court в одном тике. */
+    bond_growth_per_tick_affiliation: number;
     bond_decay_per_tick_apart: number;
     bond_proximity_radius_units: number;
     aversion_decay_per_day: number;

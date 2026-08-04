@@ -4,7 +4,7 @@ import { getConstants } from "./config.js";
 import { RestRateLimiter } from "./rateLimit.js";
 import { clientIp } from "./ip.js";
 import { sendJson } from "./http.js";
-import { handleCreatureCard, handleSocialGraph, handleWorldStats } from "./rest.js";
+import { handleCreatureCard, handleGenealogy, handleSocialGraph, handleWorldStats } from "./rest.js";
 import { attachWebSocketServer } from "./ws.js";
 
 const CREATURE_PATH_RE = /^\/api\/creatures\/([^/]+)$/;
@@ -20,6 +20,7 @@ async function route(req: IncomingMessage, res: ServerResponse, pool: Pool): Pro
 
   if (url.pathname === "/api/world/stats") return handleWorldStats(res, pool);
   if (url.pathname === "/api/social-graph") return handleSocialGraph(res, pool);
+  if (url.pathname === "/api/genealogy") return handleGenealogy(res, pool);
   const creatureMatch = url.pathname.match(CREATURE_PATH_RE);
   if (creatureMatch) return handleCreatureCard(res, pool, decodeURIComponent(creatureMatch[1]));
 

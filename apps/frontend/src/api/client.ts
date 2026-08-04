@@ -14,6 +14,14 @@ export interface CreatureCard {
   narrative_facts: string[];
   intentions: Array<{ text: string; effect?: Record<string, unknown> }>;
   habits: Record<string, number>;
+  mate: {
+    id: string;
+    name: string;
+    species: "penguin" | "orca";
+    sex: "m" | "f";
+    strength: number;
+    alive: boolean;
+  } | null;
   timeline: Array<{
     id: string;
     tick: number;
@@ -28,6 +36,22 @@ export interface CreatureCard {
 export interface SocialGraph {
   nodes: Array<{ id: string; species: "penguin" | "orca"; name: string }>;
   edges: Array<{ a: string; b: string; strength: number; kind: "friend" | "mate" | "kin" }>;
+}
+
+export interface GenealogyNode {
+  id: string;
+  species: "penguin" | "orca";
+  name: string;
+  sex: "m" | "f";
+  born_at_tick: number;
+  died_at_tick: number | null;
+  parent_a: string | null;
+  parent_b: string | null;
+  alive: boolean;
+}
+
+export interface Genealogy {
+  nodes: GenealogyNode[];
 }
 
 export interface WorldStats {
@@ -58,6 +82,10 @@ export function fetchCreatureCard(id: string): Promise<CreatureCard> {
 
 export function fetchSocialGraph(): Promise<SocialGraph> {
   return getJson(`/api/social-graph`);
+}
+
+export function fetchGenealogy(): Promise<Genealogy> {
+  return getJson(`/api/genealogy`);
 }
 
 export function fetchWorldStats(): Promise<WorldStats> {

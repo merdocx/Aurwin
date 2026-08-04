@@ -94,6 +94,18 @@ export function CreatureCardPanel({ creatureId, onName }: Props) {
         </p>
       )}
 
+      {card.mate && (
+        <section style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: 12, color: "var(--fg-tertiary)", textTransform: "uppercase", letterSpacing: "0.06em" }}>пара</span>
+          <p style={{ margin: 0, fontSize: 14, color: "var(--fg-secondary)" }}>
+            {card.mate.name}
+            {card.mate.sex === "m" ? " ♂" : " ♀"}
+            {!card.mate.alive ? " †" : ""}
+            <span style={{ color: "var(--fg-tertiary)" }}> · связь {(card.mate.strength * 100).toFixed(0)}%</span>
+          </p>
+        </section>
+      )}
+
       {card.narrative_facts.length > 0 && (
         <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 4 }}>
           {card.narrative_facts.map((fact, i) => (

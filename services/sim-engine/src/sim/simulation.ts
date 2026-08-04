@@ -12,7 +12,7 @@ import { canMate, createOffspring, inheritAversions, isForbiddenPair } from "./r
 import { ageStageFor, ageWeeksAt } from "./lifecycle.js";
 import { advanceBioClocks, rollOldAgeDeath } from "./needs.js";
 import { sense, decayPerceivedStates, reinforceVisiblePredatorThreat, bumpPreyThreatOfOrca, visionRange, hearingRange } from "./perception.js";
-import { decide, type DecideContext, type Decision } from "./utilityAI.js";
+import { decide, syncHeuristicMateIntentions, type DecideContext, type Decision } from "./utilityAI.js";
 import {
   deriveActivity,
   movementTargetPos,
@@ -389,7 +389,7 @@ export class Simulation {
     this.enqueueReflectionsStep(decisions);
 
     // 9. updateBondsAndAversions()
-    this.updateBondsAndAversionsStep(alive, visibleByCreature);
+    this.updateBondsAndAversionsStep(alive, visibleByCreature, decisions);
 
     // 10. updateSkillsAndHabits()
     for (const { creatureId, skill } of tickSkillGrowth) {
@@ -517,13 +517,15 @@ export class Simulation {
 
   // ---- шаг 5 ----
   private decideFor(creature: Creature, visible: Creature[], phase: "day" | "night", _isNight: boolean): Decision {
+    const bondStrength = bondStrengthLookup(this.bonds, creature.id);
+    syncHeuristicMateIntentions(creature, visible, bondStrength, this.tick_);
     const ctx: DecideContext = {
       creature,
       currentTick: this.tick_,
       phase,
       visible,
       fishAvailability: (zone: ZoneName) => this.world.fish.availability(zone, phase === "night"),
-      bondStrength: bondStrengthLookup(this.bonds, creature.id),
+      bondStrength,
       aversionStrength: aversionStrengthLookup(this.aversions, creature.id),
       rng: this.rng,
       visibilityMultiplier: (id: string) => this.visibilityMultiplierFor(id),
@@ -1086,16 +1088,40 @@ export class Simulation {
         continue;
       }
       if (record.kind !== "mate") {
+        // Soft monogamy: один активный mate на особь — старые mate → friend + mate_breakup.
+        this.breakOtherMates(courtier.id, target.id);
+        this.breakOtherMates(target.id, courtier.id);
         record.kind = "mate";
         this.emitWorldEvent({ tick: this.tick_, type: "mate_bonded", actorId: courtier.id, targetId: target.id, zone: courtier.zone, payload: {} });
       }
     }
   }
 
+  /** Переводит прочие mate-bonds существа в friend (кроме пары с keepPartnerId). */
+  private breakOtherMates(creatureId: string, keepPartnerId: string): void {
+    for (const record of this.bonds.values()) {
+      if (record.kind !== "mate") continue;
+      const involves = record.creatureA === creatureId || record.creatureB === creatureId;
+      if (!involves) continue;
+      const other = record.creatureA === creatureId ? record.creatureB : record.creatureA;
+      if (other === keepPartnerId) continue;
+      record.kind = "friend";
+      this.emitWorldEvent({
+        tick: this.tick_,
+        type: "mate_breakup",
+        actorId: creatureId,
+        targetId: other,
+        zone: this.creatures.get(creatureId)?.zone,
+        payload: { reason: "new_pair" },
+      });
+    }
+  }
+
   private processReproduction(byId: Map<string, Creature>): void {
     const constants = getSimConstants();
     for (const record of this.bonds.values()) {
-      if (record.kind !== "friend" && record.kind !== "mate") continue;
+      // Рождение только у уже сформированной пары (mate). Дружба → пара через court.
+      if (record.kind !== "mate") continue;
       const a = byId.get(record.creatureA);
       const b = byId.get(record.creatureB);
       if (!a || !b || !isAlive(a) || !isAlive(b)) continue;
@@ -1112,13 +1138,8 @@ export class Simulation {
       inheritAversions(a, b, offspring.id, this.aversions);
       a.lastReproducedAtTick = this.tick_;
       b.lastReproducedAtTick = this.tick_;
-      const newlyBonded = record.kind !== "mate";
-      record.kind = "mate";
       this.creatures.set(offspring.id, offspring);
       this.acc.births[offspring.species] += 1;
-      if (newlyBonded) {
-        this.emitWorldEvent({ tick: this.tick_, type: "mate_bonded", actorId: a.id, targetId: b.id, zone: a.zone, payload: {} });
-      }
 
       for (const parent of [a, b]) {
         applyEmotionDelta(parent, EMOTION_DELTAS.birth_parent);
@@ -1162,19 +1183,38 @@ export class Simulation {
   }
 
   // ---- шаг 9 ----
-  private updateBondsAndAversionsStep(alive: Creature[], visibleByCreature: Map<string, Creature[]>): void {
+  private updateBondsAndAversionsStep(
+    alive: Creature[],
+    visibleByCreature: Map<string, Creature[]>,
+    decisions: Map<string, Decision>,
+  ): void {
     const touched = new Set<string>();
+    const affiliationBoost = getSimConstants().social.bond_growth_per_tick_affiliation;
+    const affiliative = (d: Decision | undefined, towardId: string): boolean => {
+      if (!d) return false;
+      if (d.action === "socialize") return true;
+      if ((d.action === "approach" || d.action === "court") && d.targetId === towardId) return true;
+      return false;
+    };
     for (const creature of alive) {
       if (!isAlive(creature)) continue;
       const visible = visibleByCreature.get(creature.id) ?? [];
       for (const other of visible) {
         if (creature.id >= other.id) continue; // обрабатываем каждую пару один раз
         if (!isAlive(other)) continue;
-        const key = `${creature.id}|${other.id}`;
+        const key = bondKey(creature.id, other.id);
         const before = this.bonds.get(key)?.strength ?? 0;
         const record = growBondForPair(creature, other, this.bonds);
         if (!record) continue;
         touched.add(key);
+        // A4: взаимное approach/socialize/court усиливает связь сверх пассивного радиуса.
+        if (
+          affiliationBoost > 0 &&
+          affiliative(decisions.get(creature.id), other.id) &&
+          affiliative(decisions.get(other.id), creature.id)
+        ) {
+          record.strength = Math.min(1, record.strength + affiliationBoost);
+        }
         if (before < getSimConstants().social.friendship.threshold && record.strength >= getSimConstants().social.friendship.threshold) {
           this.emitWorldEvent({ tick: this.tick_, type: "bond_formed", actorId: creature.id, targetId: other.id, zone: creature.zone, payload: {} });
           const sig = getSimConstants().episode_significance.bond_formed;

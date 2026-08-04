@@ -113,6 +113,30 @@ export async function getCreatureCard(pool: Pool, id: string): Promise<CreatureC
   return result.rows[0];
 }
 
+export interface MatePartnerRow {
+  id: string;
+  name: string;
+  species: "penguin" | "orca";
+  sex: "m" | "f";
+  strength: number;
+  alive: boolean;
+}
+
+/** Текущий mate-партнёр (soft monogamy: не больше одной живой пары). */
+export async function getMatePartner(pool: Pool, id: string): Promise<MatePartnerRow | null> {
+  const result = await pool.query<MatePartnerRow>(
+    `SELECT c.id, c.name, c.species, c.sex, b.strength::float8 AS strength,
+            (c.died_at_tick IS NULL) AS alive
+     FROM bonds b
+     JOIN creatures c ON c.id = CASE WHEN b.creature_a = $1 THEN b.creature_b ELSE b.creature_a END
+     WHERE b.kind = 'mate' AND (b.creature_a = $1 OR b.creature_b = $1)
+     ORDER BY b.strength DESC
+     LIMIT 1`,
+    [id],
+  );
+  return result.rows[0] ?? null;
+}
+
 export async function getCreatureTimeline(pool: Pool, id: string, limit = 30): Promise<WorldEventRow[]> {
   const result = await pool.query<WorldEventRow>(
     `SELECT id, tick, type, actor_id, target_id, zone, payload, created_at
@@ -222,4 +246,25 @@ export async function getWorldStats(pool: Pool): Promise<WorldStats> {
     population,
     generation: generationResult.rows[0]?.max_generation ?? 0,
   };
+}
+
+export interface GenealogyNode {
+  id: string;
+  species: "penguin" | "orca";
+  name: string;
+  sex: "m" | "f";
+  born_at_tick: string;
+  died_at_tick: string | null;
+  parent_a: string | null;
+  parent_b: string | null;
+}
+
+/** Все существа (живые и мёртвые) с родителями — для вкладки «Древо». Без narrative. */
+export async function getGenealogy(pool: Pool): Promise<{ nodes: GenealogyNode[] }> {
+  const result = await pool.query<GenealogyNode>(
+    `SELECT id, species, name, sex, born_at_tick, died_at_tick, parent_a, parent_b
+     FROM creatures
+     ORDER BY born_at_tick ASC, name ASC`,
+  );
+  return { nodes: result.rows };
 }

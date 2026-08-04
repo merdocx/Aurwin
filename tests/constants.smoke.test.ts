@@ -156,6 +156,7 @@ const EXPECTED_PATHS = [
   // Фаза 4 «Жизнь» — константы вне табл. А.9 дословно, необходимые для
   // реализации 7.4/7.7/7.8/7.9/7.10 (обоснование — ops/DEVIATIONS.md).
   "social.bond_growth_per_tick_within_radius",
+  "social.bond_growth_per_tick_affiliation",
   "social.bond_decay_per_tick_apart",
   "social.bond_proximity_radius_units",
   "social.aversion_decay_per_day",
