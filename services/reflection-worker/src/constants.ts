@@ -24,6 +24,7 @@ export interface ReflectionConstants {
   event_global_limit_per_hour: number;
   event_global_limit_per_day: number;
   background_interval_hours: number;
+  quiet_background_interval_hours: number;
   llm_daily_budget_usd: number;
   llm_budget_alert_multiplier: number;
   models: { background: string; event: string };

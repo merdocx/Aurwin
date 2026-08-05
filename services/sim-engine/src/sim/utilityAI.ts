@@ -75,9 +75,15 @@ function playfulTerm(creature: Creature): number {
   return Math.max(0, creature.emotion.valence) * (1 - creature.emotion.arousal * 0.5);
 }
 
-function intentionTerm(creature: Creature, action: string, zone: ZoneName | undefined, targetId: string | undefined, isCourt: boolean): number {
+function intentionTerm(
+  creature: Creature,
+  action: string,
+  zone: ZoneName | undefined,
+  targetId: string | undefined,
+  options?: { huntPartnerId?: string },
+): number {
   let total = 0;
-  const { zone_preference, hunt_with_bonus } = getSimConstants().utility_ai.intention_effects;
+  const { zone_preference, hunt_with_bonus, seek_mate_bonus } = getSimConstants().utility_ai.intention_effects;
   for (const intention of creature.intentions) {
     const eff = intention.effect;
     if (zone && eff.zone_penalty?.[zone] !== undefined) total -= eff.zone_penalty[zone]!;
@@ -86,8 +92,10 @@ function intentionTerm(creature: Creature, action: string, zone: ZoneName | unde
     if (zone && eff.avoid_zone === zone) total -= zone_preference;
     if (targetId && eff.approach_bonus?.creature === targetId) total += eff.approach_bonus.value;
     if (targetId && eff.avoid_creature?.creature === targetId) total -= eff.avoid_creature.value;
-    if (action === "hunt" && targetId && eff.hunt_with === targetId) total += hunt_with_bonus;
-    if (isCourt && eff.seek_mate) total += 0.3;
+    if ((action === "hunt" || action === "coordinate_hunt") && options?.huntPartnerId && eff.hunt_with === options.huntPartnerId) {
+      total += hunt_with_bonus;
+    }
+    if (action === "court" && eff.seek_mate) total += seek_mate_bonus;
   }
   return total;
 }
@@ -181,7 +189,7 @@ export function decide(ctx: DecideContext): Decision {
       habit: habitTerm(creature, creature.zone),
       safety: safetyScore(creature, creature.zone) * 0.05,
       emotion: playfulTerm(creature) * 0.1,
-      intention: intentionTerm(creature, "wander", creature.zone, undefined, false),
+      intention: intentionTerm(creature, "wander", creature.zone, undefined),
       episode: episodeActionBias(creature, "wander", creature.zone, undefined),
     };
     if (creature.species === "penguin" && creature.needs.hunger > 0.55) {
@@ -276,7 +284,7 @@ function decidePenguinActions(
     const score =
       fishAvailability(zone) * 0.55 +
       safetyScore(creature, zone) * 0.45 +
-      intentionTerm(creature, "goto_food", zone, undefined, false);
+      intentionTerm(creature, "goto_food", zone, undefined);
     if (score > bestFeedingScore) {
       bestFeedingScore = score;
       bestFeedingZone = zone;
@@ -297,7 +305,7 @@ function decidePenguinActions(
           habit: habitTerm(creature, bestFeedingZone),
           safety: safetyScore(creature, bestFeedingZone) * 0.35,
           threat: -zoneThreat * 0.4,
-          intention: intentionTerm(creature, "goto_food", bestFeedingZone, undefined, false),
+            intention: intentionTerm(creature, "goto_food", bestFeedingZone, undefined),
           episode: episodeActionBias(creature, "goto_food", bestFeedingZone, undefined),
         },
         rng,
@@ -384,7 +392,7 @@ function decidePenguinActions(
           trait: traitTerm(creature, (t) => t.caution * 0.5 - t.courage * 0.3),
           skill: skillTerm(creature, creature.skills.evasion),
           emotion: fearTerm(creature) * 0.5,
-          intention: intentionTerm(creature, "flee", refuge, nearestOrca.id, false),
+            intention: intentionTerm(creature, "flee", refuge, nearestOrca.id),
           episode: episodeActionBias(creature, "flee", refuge, nearestOrca.id),
         },
         rng,
@@ -464,7 +472,7 @@ function decidePenguinActions(
             skill: skillTerm(creature, creature.skills.socializing),
             bond: bestFriendStrength * 0.4,
             aversion: -aversionStrength(bestFriend.id) * 0.4,
-            intention: intentionTerm(creature, "approach", undefined, bestFriend.id, false),
+              intention: intentionTerm(creature, "approach", undefined, bestFriend.id),
             predator_nearby: socialPredatorPenalty,
           },
           rng,
@@ -501,7 +509,7 @@ function decidePenguinActions(
               trait: traitTerm(creature, (t) => t.sociability * 0.3 + t.aggression * 0.1 + t.courage * 0.1),
               bond: bondStrength(bestMate.id) * 0.65,
               satiation: courtSatiationBonus(creature, bestMate),
-              intention: intentionTerm(creature, "court", undefined, bestMate.id, true),
+              intention: intentionTerm(creature, "court", undefined, bestMate.id),
               predator_nearby: socialPredatorPenalty,
             },
             rng,
@@ -533,6 +541,7 @@ function decidePenguinActions(
             skill: skillTerm(creature, creature.skills.parenting) * 1.5,
             emotion: fearTerm(creature) * -0.1,
             night: isNight ? 0.2 : 0,
+            intention: intentionTerm(creature, "guard_offspring", creature.zone, offspring.id),
           },
           rng,
           noiseMax,
@@ -548,6 +557,7 @@ function decidePenguinActions(
             {
               skill: skillTerm(creature, creature.skills.parenting) * 1.2,
               trait: traitTerm(creature, (t) => t.sociability * 0.1),
+              intention: intentionTerm(creature, "provision", creature.zone, offspring.id),
             },
             rng,
             noiseMax,
@@ -652,7 +662,7 @@ function decideOrcaActions(
             skill: skillTerm(creature, creature.skills.hunting),
             trait: traitTerm(creature, (t) => t.aggression * 0.35 + t.courage * 0.2),
             attractiveness: bestScore * 0.5,
-            intention: intentionTerm(creature, "hunt", best.zone, best.id, false),
+            intention: intentionTerm(creature, "hunt", best.zone, best.id),
             episode: episodeActionBias(creature, "hunt", best.zone, best.id),
           },
           rng,
@@ -703,6 +713,7 @@ function decideOrcaActions(
               bond: bestPartnerBond * 0.5,
               groupBonus: bestGroupProtected ? 0.4 : 0,
               innate_prey: innatePreyValue * 0.25,
+              intention: intentionTerm(creature, "coordinate_hunt", best.zone, best.id, { huntPartnerId: bestPartner.id }),
               episode: episodeActionBias(creature, "coordinate_hunt", best.zone, best.id),
             },
             rng,
@@ -759,7 +770,7 @@ function decideOrcaActions(
               trait: traitTerm(creature, (t) => t.sociability * 0.3),
               bond: bondStrength(bestMate.id) * 0.65,
               satiation: courtSatiationBonus(creature, bestMate),
-              intention: intentionTerm(creature, "court", undefined, bestMate.id, true),
+              intention: intentionTerm(creature, "court", undefined, bestMate.id),
             },
             rng,
             noiseMax,

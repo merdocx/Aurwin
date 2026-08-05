@@ -76,6 +76,8 @@ export interface SimulationHooks {
    * ops/DEVIATIONS.md, фаза 6).
    */
   mockReflectionEnabled?: boolean;
+  /** Offline override для simulate --fast: подмешивает записанные prod reflections вместо простой заглушки. */
+  mockReflectionGenerator?: (creature: Creature) => ReflectionResult;
 }
 
 /**
@@ -1161,7 +1163,7 @@ export class Simulation {
       if (!creature || !isAlive(creature)) continue;
       if (creature.ageStage === "juvenile") continue; // "рефлексия — только фоновая" уже подразумевается; детёныш всё равно получает фоновую по тому же правилу ниже.
       if (!shouldTriggerBackgroundReflection(creature, true, this.tick_)) continue;
-      const result = generateMockReflection(creature);
+      const result = this.hooks.mockReflectionGenerator?.(creature) ?? generateMockReflection(creature);
       this.pendingReflections.push({ creatureId, result });
     }
   }

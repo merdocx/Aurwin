@@ -1,6 +1,8 @@
 import http from "node:http";
 import client from "prom-client";
+import type { Pool } from "pg";
 import { noteLlmSpend } from "./budgetGate.js";
+import { fetchReflectionStalenessBySpecies, fetchReflectionStatusCounts } from "./db.js";
 
 /**
  * Экспорт метрик LLM-рефлексии (ТЗ 6.1 "Метрики LLM", А.7, фаза 7
@@ -29,7 +31,7 @@ const llmCalls = new client.Counter({
 
 const llmCostUsd = new client.Counter({
   name: "aurwin_llm_cost_usd_total",
-  help: "Накопленная стоимость вызовов LLM в USD (А.7, А.9: план ~$0.40/сутки, алёрт > 2х)",
+  help: "Накопленная стоимость вызовов LLM в USD (А.7, А.9: план ~$0.50/сутки, алёрт > 2х)",
   labelNames: ["type", "model"],
   registers: [register],
 });
@@ -39,6 +41,20 @@ const llmLatencySeconds = new client.Histogram({
   help: "Латентность вызова LLM-рефлексии, сек",
   labelNames: ["type", "model"],
   buckets: [0.2, 0.5, 1, 2, 5, 10, 20, 40, 80],
+  registers: [register],
+});
+
+const reflectionQueueByStatus = new client.Gauge({
+  name: "aurwin_reflection_queue_by_status",
+  help: "Текущее число строк reflections по статусу (queued/sent/applied/discarded/failed)",
+  labelNames: ["status"],
+  registers: [register],
+});
+
+const reflectionStalenessHours = new client.Gauge({
+  name: "aurwin_reflection_staleness_hours",
+  help: "Сколько часов прошло с последней применённой рефлексии у живых существ (avg/max по видам)",
+  labelNames: ["species", "kind"],
   registers: [register],
 });
 
@@ -56,6 +72,17 @@ export function recordLlmCall(record: LlmCallRecord): void {
   llmCostUsd.inc({ type: record.type, model: record.model }, record.costUsd);
   llmLatencySeconds.observe({ type: record.type, model: record.model }, record.latencySeconds);
   noteLlmSpend(record.costUsd);
+}
+
+export async function syncReflectionHealthMetrics(pool: Pool): Promise<void> {
+  const [statusCounts, staleness] = await Promise.all([fetchReflectionStatusCounts(pool), fetchReflectionStalenessBySpecies(pool)]);
+  for (const status of ["queued", "sent", "applied", "discarded", "failed"] as const) {
+    reflectionQueueByStatus.set({ status }, statusCounts.get(status) ?? 0);
+  }
+  for (const row of staleness) {
+    reflectionStalenessHours.set({ species: row.species, kind: "avg" }, row.avgHours);
+    reflectionStalenessHours.set({ species: row.species, kind: "max" }, row.maxHours);
+  }
 }
 
 /** Экспортирован для тестов (services/reflection-worker/tests/metrics.test.ts). */

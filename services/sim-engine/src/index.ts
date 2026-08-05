@@ -12,6 +12,7 @@
 // НЕ останавливают тик-цикл (мир не должен замирать из-за сетевого сбоя).
 
 import { Simulation } from "./sim/simulation.js";
+import { seedGenesisNarratives } from "./sim/genesisNarrative.js";
 import { getSimConstants } from "./sim/simConstants.js";
 import { isAlive, type WorldEvent } from "./sim/types.js";
 import { createPool } from "./persistence/pool.js";
@@ -93,6 +94,7 @@ if (restored) {
   console.log(`[sim-engine] мир восстановлен из снапшота: тик ${restored.tick}, ${restored.creatures.length} живых существ`);
 } else {
   console.log(`[sim-engine] мир не найден в БД — genesis-запуск`);
+  await seedGenesisNarratives(sim.aliveCreatures());
   // Атомарная запись genesis-популяции + world_clock ОДНОЙ транзакцией (см.
   // persistGenesis) — устраняет само окно, в котором creatures успевают
   // попасть в БД без world_clock при крахе процесса между двумя раздельными

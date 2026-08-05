@@ -470,6 +470,27 @@ Offline gate: `--days 7 --fast` затем `--days 30 --fast` (см. отчёт 
 Live мониторинг 48h при текущих константах всё ещё актуален (тонкая
 популяция ~5/2 на момент деплоя).
 
+## 2026-08-05 — reset мира после улучшения ИИ-слоя
+
+**Причина.** После реализации AI-роадмапа история старого мира стала
+несопоставима с новой логикой: бюджет LLM поднят до `$0.50`, «тихий» фон
+переведён на `48h`, очередь рефлексии получила приоритизацию, `intentionTerm`
+расширен, genesis получил синхронный LLM-path с timeout/fallback, а
+`simulate --fast` — режим `--replay-reflections`.
+
+**Операция.**
+- Перед сбросом сохранён бэкап: `ops/backup/dumps/aurwin-20260805T085214Z.dump`.
+- Остановлены `sim-engine`, `reflection-worker`, `api-gateway`, `frontend`.
+- Выполнен `TRUNCATE ... CASCADE` по таблицам мира, истории и `world_clock`.
+- Сервисы пересобраны и подняты заново через `docker compose up -d --build`.
+
+**Результат.**
+- `npm test` зелёный перед reset.
+- `sim-engine` выполнил cold start: `мир не найден в БД — genesis-запуск`.
+- Genesis LLM-path попробовал один sync вызов, получил timeout `15s` и штатно
+  деградировал в fallback без срыва запуска.
+- Новая стартовая популяция в БД подтверждена: **20 пингвинов + 2 касатки**.
+
 ## 2026-08-04 — realism roadmap: court/affiliation/eco + soft monogamy
 
 **Код (sim-engine / api-gateway / frontend):**

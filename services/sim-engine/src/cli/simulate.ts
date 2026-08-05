@@ -7,6 +7,7 @@
 // отчёт по завершении. Ничего не пишет в БД — фаза 4 сознательно чисто
 // in-memory (ops/DEVIATIONS.md), это инструмент проверки баланса, не сервис.
 import { Simulation, type SimulationHooks } from "../sim/simulation.js";
+import { createReplayReflectionGenerator, loadReplayReflectionLibrary } from "./replayReflections.js";
 import { getSimConstants } from "../sim/simConstants.js";
 import { realDaysToTicks } from "../sim/time.js";
 import { TRAIT_KEYS, SKILL_KEYS, isAlive, type Creature, type Species, type WorldEvent } from "../sim/types.js";
@@ -16,22 +17,25 @@ interface Args {
   days: number;
   fast: boolean;
   seed: number;
+  replayReflections?: string;
 }
 
 function parseArgs(argv: string[]): Args {
   let days = 30;
   let fast = false;
   let seed = Math.floor(Date.now() % 1_000_000);
+  let replayReflections: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--days") days = Number(argv[++i]);
     else if (a === "--fast") fast = true;
     else if (a === "--seed") seed = Number(argv[++i]);
+    else if (a === "--replay-reflections") replayReflections = argv[++i];
     else throw new Error(`неизвестный аргумент: ${a}`);
   }
   if (!Number.isFinite(days) || days <= 0) throw new Error("--days должен быть положительным числом");
   if (!Number.isFinite(seed)) throw new Error("--seed должен быть числом");
-  return { days, fast, seed };
+  return { days, fast, seed, replayReflections };
 }
 
 function mean(xs: number[]): number {
@@ -87,6 +91,9 @@ function main(): void {
     );
   }
   console.error(`[simulate] старт: days=${args.days} seed=${args.seed} fast=${args.fast}`);
+  if (args.replayReflections) {
+    console.error(`[simulate] replay reflections: ${args.replayReflections}`);
+  }
 
   // ---- сбор метрик, накапливаемых через хуки/снимки (не трогая sim/*.ts) ----
   const traitsAtGenesis: Record<Species, Record<string, number[]>> = { penguin: {}, orca: {} };
@@ -133,6 +140,12 @@ function main(): void {
       }
     },
   };
+
+  if (args.replayReflections) {
+    const samples = loadReplayReflectionLibrary(args.replayReflections);
+    console.error(`[simulate] загружено replay reflections: ${samples.length}`);
+    hooks.mockReflectionGenerator = createReplayReflectionGenerator(samples);
+  }
 
   sim = new Simulation(args.seed, hooks);
   for (const c of sim.creatures.values()) {

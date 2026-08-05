@@ -190,6 +190,20 @@ const innateDecisionRatio = new client.Gauge({
   registers: [register],
 });
 
+const decisionIntentionRatio = new client.Gauge({
+  name: "aurwin_decision_intention_ratio",
+  help: "Доля записанных решений, где выбранное действие имело ненулевой вклад intention в breakdown",
+  labelNames: ["species"],
+  registers: [register],
+});
+
+const decisionIntentionAbsMean = new client.Gauge({
+  name: "aurwin_decision_intention_abs_mean",
+  help: "Средний абсолютный вклад intention в breakdown выбранного действия по ring-buffer decisionLog",
+  labelNames: ["species"],
+  registers: [register],
+});
+
 const SPECIES: Species[] = ["penguin", "orca"];
 
 function meanStddev(values: number[]): { mean: number; stddev: number } {
@@ -248,6 +262,25 @@ function avgTrust(creatures: Creature[]): number {
   return count > 0 ? sum / count : 0;
 }
 
+function chosenIntentionContribution(
+  sim: Simulation,
+  species: Species,
+): { ratio: number; absMean: number } {
+  const relevant = sim.decisionLog
+    .map((entry) => {
+      const creature = sim.creatures.get(entry.creatureId);
+      if (!creature || creature.species !== species) return undefined;
+      const chosen = entry.factors.find((f) => f.action === entry.chosenAction || f.action.startsWith(`${entry.chosenAction}(`));
+      if (!chosen) return undefined;
+      return chosen.breakdown.intention ?? 0;
+    })
+    .filter((v): v is number => v !== undefined);
+  if (relevant.length === 0) return { ratio: 0, absMean: 0 };
+  const withIntention = relevant.filter((v) => Math.abs(v) > 1e-9);
+  const absMean = relevant.reduce((sum, v) => sum + Math.abs(v), 0) / relevant.length;
+  return { ratio: withIntention.length / relevant.length, absMean };
+}
+
 /** Разрешает уровень значимости смерти по хищнику ночью для алёрта/наблюдения за 7.10. */
 export function recordWorldEvent(event: WorldEvent, phase: Phase): void {
   if (event.type !== "death") return;
@@ -290,6 +323,10 @@ export function setPopulationGauges(sim: Simulation): void {
     if (computeDivergence) {
       behavioralDivergence.set({ species }, cohortDivergence(group));
     }
+
+    const intention = chosenIntentionContribution(sim, species);
+    decisionIntentionRatio.set({ species }, intention.ratio);
+    decisionIntentionAbsMean.set({ species }, intention.absMean);
   }
 
   for (const [signalType, count] of Object.entries(sim.acc.signalsSent)) {

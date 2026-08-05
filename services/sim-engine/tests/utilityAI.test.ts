@@ -168,6 +168,133 @@ describe("utilityAI.decide (А.4 + instincts)", () => {
     const flee = decision.factors.find((f) => f.action.startsWith("flee"));
     expect(flee?.breakdown.innate).toBeGreaterThan(0.5);
   });
+
+  it("seek_mate из intentions добавляет court бонус из constants.yaml", () => {
+    const creature = makeTestCreature({
+      id: "court-self",
+      sex: "m",
+      needs: { hunger: 0.2, energy: 0.8, social: 0.2, sleep_pressure: 0.1 },
+      intentions: [{ text: "искать пару", effect: { seek_mate: true } }],
+    });
+    const mate = makeTestCreature({
+      id: "court-target",
+      sex: "f",
+      pos: { x: 102, y: 100 },
+      needs: { hunger: 0.2, energy: 0.8, social: 0.2, sleep_pressure: 0.1 },
+    });
+
+    const decision = decide({
+      creature,
+      currentTick: 100000,
+      phase: "day",
+      visible: [mate],
+      fishAvailability: () => 0.3,
+      bondStrength: (id) => (id === mate.id ? 0.9 : 0),
+      aversionStrength: () => 0,
+      rng: new Rng(21),
+      noiseMaxOverride: 0,
+    });
+
+    const court = decision.factors.find((f) => f.action.startsWith("court"));
+    expect(court?.breakdown.intention).toBeCloseTo(getSimConstants().utility_ai.intention_effects.seek_mate_bonus, 6);
+  });
+
+  it("intention влияет на utility guard_offspring для конкретного детёныша", () => {
+    const parent = makeTestCreature({
+      id: "parent",
+      intentions: [{ text: "держаться рядом с детёнышем", effect: { approach_bonus: { creature: "child", value: 0.4 } } }],
+    });
+    const child = makeTestCreature({
+      id: "child",
+      bornAtTick: 99950,
+      ageStage: "juvenile",
+      parentA: parent.id,
+      pos: { x: 104, y: 100 },
+    });
+
+    const decision = decide({
+      creature: parent,
+      currentTick: 100000,
+      phase: "night",
+      visible: [child],
+      fishAvailability: () => 0,
+      bondStrength: () => 0,
+      aversionStrength: () => 0,
+      rng: new Rng(22),
+      noiseMaxOverride: 0,
+    });
+
+    const guard = decision.factors.find((f) => f.action.startsWith("guard_offspring"));
+    expect(guard?.breakdown.intention).toBeCloseTo(0.4, 6);
+  });
+
+  it("intention влияет на utility provision для конкретного детёныша", () => {
+    const parent = makeTestCreature({
+      id: "provider",
+      needs: { hunger: 0.2, energy: 0.8, social: 0.2, sleep_pressure: 0.1 },
+      intentions: [{ text: "накормить детёныша", effect: { approach_bonus: { creature: "child-p", value: 0.35 } } }],
+    });
+    const child = makeTestCreature({
+      id: "child-p",
+      bornAtTick: 99950,
+      ageStage: "juvenile",
+      parentA: parent.id,
+      pos: { x: 104, y: 100 },
+    });
+
+    const decision = decide({
+      creature: parent,
+      currentTick: 100000,
+      phase: "day",
+      visible: [child],
+      fishAvailability: () => 0,
+      bondStrength: () => 0,
+      aversionStrength: () => 0,
+      rng: new Rng(23),
+      noiseMaxOverride: 0,
+    });
+
+    const provision = decision.factors.find((f) => f.action.startsWith("provision"));
+    expect(provision?.breakdown.intention).toBeCloseTo(0.35, 6);
+  });
+
+  it("hunt_with влияет на utility coordinate_hunt через id партнёра, а не жертвы", () => {
+    const hunter = makeTestCreature({
+      id: "hunter",
+      species: "orca",
+      zone: "open_water",
+      pos: { x: 500, y: 500 },
+      needs: { hunger: 0.9, energy: 0.8, social: 0.2, sleep_pressure: 0.1 },
+      intentions: [{ text: "охотиться вместе с напарником", effect: { hunt_with: "partner" } }],
+    });
+    const partner = makeTestCreature({
+      id: "partner",
+      species: "orca",
+      zone: "open_water",
+      pos: { x: 510, y: 500 },
+    });
+    const prey = makeTestCreature({
+      id: "prey",
+      species: "penguin",
+      zone: "open_water",
+      pos: { x: 520, y: 500 },
+    });
+
+    const decision = decide({
+      creature: hunter,
+      currentTick: 100000,
+      phase: "day",
+      visible: [partner, prey],
+      fishAvailability: () => 0,
+      bondStrength: (id) => (id === partner.id ? 0.9 : 0),
+      aversionStrength: () => 0,
+      rng: new Rng(24),
+      noiseMaxOverride: 0,
+    });
+
+    const coordinated = decision.factors.find((f) => f.action.startsWith("coordinate_hunt"));
+    expect(coordinated?.breakdown.intention).toBeCloseTo(getSimConstants().utility_ai.intention_effects.hunt_with_bonus, 6);
+  });
 });
 
 describe("instincts seed", () => {

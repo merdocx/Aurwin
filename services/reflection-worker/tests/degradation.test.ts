@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ensureMigratedUp, getTestPool, insertCreature } from "../../db/tests/helpers.js";
 import { ReflectionWorker } from "../src/worker.js";
 import { buildGroundedResponse, FakeAnthropicTransport } from "./fakeTransport.js";
@@ -15,6 +15,20 @@ import { buildGroundedResponse, FakeAnthropicTransport } from "./fakeTransport.j
 describe("reflection-worker: деградация при недоступном Anthropic API (7.3)", () => {
   beforeAll(async () => {
     await ensureMigratedUp();
+  });
+
+  beforeEach(async () => {
+    const pool = getTestPool();
+    await pool.query(`DELETE FROM reflections`);
+    await pool.query(`DELETE FROM episodes`);
+    await pool.query(`DELETE FROM bonds`);
+    await pool.query(`DELETE FROM aversions`);
+    await pool.query(`DELETE FROM signals`);
+    await pool.query(`DELETE FROM trait_history`);
+    await pool.query(`DELETE FROM learning_events`);
+    await pool.query(`DELETE FROM world_events`);
+    await pool.query(`DELETE FROM creatures`);
+    await pool.query(`DELETE FROM world_clock`);
   });
 
   it("API недоступен: очередь копится (reflections остаются 'queued'), runPass не падает, существа не теряются", async () => {

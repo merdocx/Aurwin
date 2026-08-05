@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ensureMigratedUp, getTestPool, insertCreature } from "../../db/tests/helpers.js";
 import { getConstants } from "../src/constants.js";
 import { countRecentEventReflections, findDueBackgroundCandidates, findDueEventCandidates, fetchUnconsumedEpisodes } from "../src/db.js";
@@ -29,6 +29,17 @@ async function insertDummyEventReflection(pool: ReturnType<typeof getTestPool>, 
 describe("queue.ts: отбор кандидатов (7.3) — дебаунс, слияние, глобальные лимиты", () => {
   beforeAll(async () => {
     await ensureMigratedUp();
+  });
+
+  beforeEach(async () => {
+    const pool = getTestPool();
+    await pool.query(`DELETE FROM reflections`);
+    await pool.query(`DELETE FROM episodes`);
+    await pool.query(`DELETE FROM bonds`);
+    await pool.query(`DELETE FROM aversions`);
+    await pool.query(`DELETE FROM signals`);
+    await pool.query(`DELETE FROM creatures`);
+    await pool.query(`DELETE FROM world_clock`);
   });
 
   it("findDueEventCandidates: существо с недавней событийной рефлексией НЕ считается due (дебаунс)", async () => {
@@ -81,6 +92,29 @@ describe("queue.ts: отбор кандидатов (7.3) — дебаунс, с
     const due = await findDueBackgroundCandidates(pool);
     expect(due).toContain(asleep);
     expect(due).not.toContain(awake);
+  });
+
+  it('findDueBackgroundCandidates: "тихое" спящее существо ждёт 48ч, а с триггерным эпизодом — базовые 24ч', async () => {
+    const pool = getTestPool();
+    await ensureAdultWorldTick(pool);
+
+    const quiet = await insertCreature(pool, { species: "penguin" });
+    await pool.query(`UPDATE creatures SET is_asleep = TRUE WHERE id = $1`, [quiet]);
+    await pool.query(`INSERT INTO reflections (creature_id, kind, status, created_at) VALUES ($1, 'background', 'applied', now() - interval '36 hours')`, [
+      quiet,
+    ]);
+    await pool.query(`INSERT INTO episodes (creature_id, tick, type, participants, significance) VALUES ($1, 5, 'woken_by_alarm', '{}', 0.2)`, [quiet]);
+
+    const active = await insertCreature(pool, { species: "penguin" });
+    await pool.query(`UPDATE creatures SET is_asleep = TRUE WHERE id = $1`, [active]);
+    await pool.query(`INSERT INTO reflections (creature_id, kind, status, created_at) VALUES ($1, 'background', 'applied', now() - interval '36 hours')`, [
+      active,
+    ]);
+    await insertEpisode(pool, active, "birth", 0.6);
+
+    const due = await findDueBackgroundCandidates(pool);
+    expect(due).not.toContain(quiet);
+    expect(due).toContain(active);
   });
 
   it("selectCandidates: пустой фон (нет unconsumed) — LLM не ставится, interval bookkeeping через discarded", async () => {
@@ -175,5 +209,30 @@ describe("queue.ts: отбор кандидатов (7.3) — дебаунс, с
     // проверка "лимит режет ровно до 2" не оставляла после себя постоянно
     // нулевой глобальный бюджет для всех остальных файлов.
     await pool.query(`DELETE FROM reflections WHERE creature_id = ANY($1::uuid[])`, [[limitFiller, ...creatureIds]]);
+  });
+
+  it("selectCandidates: при лимите событий более значимый тип (friend_died) идёт раньше менее значимого (hunt_success), даже если он новее", async () => {
+    const pool = getTestPool();
+    await ensureAdultWorldTick(pool);
+
+    const HOURLY_LIMIT = getConstants().reflection.event_global_limit_per_hour;
+    const alreadyUsed = await countRecentEventReflections(pool, 1);
+    const limitFiller = await insertCreature(pool, { species: "penguin" });
+    const toFill = HOURLY_LIMIT - 1 - alreadyUsed;
+    for (let i = 0; i < toFill; i++) await insertDummyEventReflection(pool, limitFiller);
+
+    const lowPriority = await insertCreature(pool, { species: "penguin" });
+    const highPriority = await insertCreature(pool, { species: "penguin" });
+    await insertEpisode(pool, lowPriority, "hunt_success", 0.5);
+    await insertEpisode(pool, highPriority, "friend_died", 0.9);
+    await pool.query(`UPDATE episodes SET created_at = now() - interval '10 minutes' WHERE creature_id = $1`, [lowPriority]);
+    await pool.query(`UPDATE episodes SET created_at = now() - interval '1 minute' WHERE creature_id = $1`, [highPriority]);
+
+    const selected = await selectCandidates(pool);
+    const picked = selected.filter((s) => s.candidate.creatureId === lowPriority || s.candidate.creatureId === highPriority);
+    expect(picked).toHaveLength(1);
+    expect(picked[0].candidate.creatureId).toBe(highPriority);
+
+    await pool.query(`DELETE FROM reflections WHERE creature_id = ANY($1::uuid[])`, [[limitFiller, lowPriority, highPriority]]);
   });
 });

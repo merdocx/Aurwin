@@ -55,8 +55,10 @@ services:
       dockerfile: services/sim-engine/Dockerfile
     restart: unless-stopped
     logging: *default-logging
-    # env_file намеренно НЕ монтируется: .env может содержать ANTHROPIC_API_KEY,
-    # который sim-engine не использует (CLAUDE.md п.1–2). Только явные PG*-переменные.
+    # env_file намеренно НЕ монтируется: .env может содержать лишние секреты.
+    # Прокидываем только точечно нужные переменные. С 2026-08-05 sim-engine
+    # использует ANTHROPIC_API_KEY ТОЛЬКО для genesis LLM-narrative на холодном
+    # старте; тиковый цикл по-прежнему не зависит от LLM.
     environment:
       # sim-engine — единственный писатель игрового состояния (А.1): пишет
       # напрямую в Postgres по имени сервиса "postgres" во внутренней сети
@@ -66,6 +68,7 @@ services:
       PGUSER: aurwin
       PGPASSWORD: ${POSTGRES_PASSWORD}
       PGDATABASE: aurwin
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy

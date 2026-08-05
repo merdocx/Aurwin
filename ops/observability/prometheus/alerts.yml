@@ -54,11 +54,11 @@ groups:
           description: "Проверить доступность Anthropic API и очередь ретраев reflection-worker (7.3: деградация не должна замедлять симуляцию, но очередь рефлексий может копиться)."
 
       - alert: AurwinLlmSpendOverBudget
-        # constants.yaml: alerting.llm_daily_cost_budget_usd = 0.40, llm_daily_cost_alert_multiplier = 2 => 0.80
-        expr: increase(aurwin_llm_cost_usd_total[24h]) > 0.80
+        # constants.yaml: alerting.llm_daily_cost_budget_usd = 0.50, llm_daily_cost_alert_multiplier = 2 => 1.00
+        expr: increase(aurwin_llm_cost_usd_total[24h]) > 1.00
         for: 0m
         labels:
           severity: warning
         annotations:
-          summary: "Расход LLM за сутки > 2х планового (~$0.40/сутки, А.9)"
+          summary: "Расход LLM за сутки > 2х планового (~$0.50/сутки, А.9)"
           description: "Фактический расход за последние 24ч: {{ $value | printf \"%.2f\" }} USD — ранний сигнал утечки бюджета (событийный шторм, ретраи без backoff, регрессия промпт-кэширования)."

@@ -48,10 +48,10 @@ docker compose exec -T reflection-worker wget -qO- http://localhost:9465/metrics
 | Алёрт | Условие | severity |
 |---|---|---|
 | `AurwinTickStalled` | тик не обновлялся > 120с | critical |
-| `AurwinPenguinPopulationOutOfRange` | пингвины < 10 или > 120 (2 мин подряд) | warning |
-| `AurwinOrcaPopulationOutOfRange` | касатки < 2 или > 12 (2 мин подряд) | warning |
+| `AurwinPenguinPopulationOutOfRange` | пингвины < 5 или > 60 (2 мин подряд) | warning |
+| `AurwinOrcaPopulationOutOfRange` | касатки < 1 или > 6 (2 мин подряд) | warning |
 | `AurwinLlmErrorRateHigh` | доля ошибок LLM > 50% за скользящий час (5 мин подряд) | critical |
-| `AurwinLlmSpendOverBudget` | расход LLM за 24ч > $0.80 (2× план $0.40) | warning |
+| `AurwinLlmSpendOverBudget` | расход LLM за 24ч > $1.00 (2× план $0.50) | warning |
 
 Посмотреть, что сейчас горит: http://127.0.0.1:9090/alerts или
 `curl -s http://127.0.0.1:9090/api/v1/alerts`.

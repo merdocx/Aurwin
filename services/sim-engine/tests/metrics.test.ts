@@ -42,6 +42,40 @@ describe("metrics: гейджи населения/навыков/сна (6.1, �
     expect(await metricValue("aurwin_births_total", { species: "penguin" })).toBe(5);
     expect(await metricValue("aurwin_deaths_total", { species: "orca", cause: "predation" })).toBe(2);
   });
+
+  it("aurwin_decision_intention_* отражают вклад intentions в выбранные действия", async () => {
+    const sim = new Simulation(4);
+    const penguin = sim.aliveCreatures().find((c) => c.species === "penguin");
+    const orca = sim.aliveCreatures().find((c) => c.species === "orca");
+    if (!penguin || !orca) throw new Error("ожидались genesis-пингвин и genesis-касатка");
+
+    sim.decisionLog.push(
+      {
+        creatureId: penguin.id,
+        tick: 1,
+        chosenAction: "wander",
+        factors: [{ action: "wander", utility: 1, breakdown: { intention: 0.3 } }],
+      },
+      {
+        creatureId: penguin.id,
+        tick: 2,
+        chosenAction: "sleep",
+        factors: [{ action: "sleep", utility: 1, breakdown: { intention: 0 } }],
+      },
+      {
+        creatureId: orca.id,
+        tick: 3,
+        chosenAction: "hunt",
+        factors: [{ action: "hunt", utility: 1, breakdown: { intention: -0.2 } }],
+      },
+    );
+
+    setPopulationGauges(sim);
+    expect(await metricValue("aurwin_decision_intention_ratio", { species: "penguin" })).toBeCloseTo(0.5, 6);
+    expect(await metricValue("aurwin_decision_intention_abs_mean", { species: "penguin" })).toBeCloseTo(0.15, 6);
+    expect(await metricValue("aurwin_decision_intention_ratio", { species: "orca" })).toBeCloseTo(1, 6);
+    expect(await metricValue("aurwin_decision_intention_abs_mean", { species: "orca" })).toBeCloseTo(0.2, 6);
+  });
 });
 
 describe("metrics: продолжительность жизни и ночные смерти от хищника (6.1, 7.10)", () => {

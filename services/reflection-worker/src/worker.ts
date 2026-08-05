@@ -4,7 +4,7 @@ import { applyReflectionResult } from "./apply.js";
 import { isLlmDailyBudgetExceeded, llmSpendLast24hUsd } from "./budgetGate.js";
 import { getConstants } from "./constants.js";
 import { fetchPendingQueuedReflections, fetchWorldTick, markReflectionFailed, markReflectionSent, type QueuedReflectionRow } from "./db.js";
-import { recordLlmCall } from "./metrics.js";
+import { recordLlmCall, syncReflectionHealthMetrics } from "./metrics.js";
 import { selectCandidates } from "./queue.js";
 import { rebuildNameToId } from "./request.js";
 import { validateReflectionResponse, type ValidatedReflection } from "./validate.js";
@@ -290,6 +290,7 @@ export class ReflectionWorker {
       console.warn(
         `[reflection-worker] суточный бюджет LLM исчерпан (spent≈$${llmSpendLast24hUsd().toFixed(3)} ≥ $${budget}) — queued без новых вызовов`,
       );
+      await syncReflectionHealthMetrics(this.pool);
       return summary;
     }
 
@@ -305,6 +306,7 @@ export class ReflectionWorker {
       for (const outcome of backgroundOutcomes.values()) tally(outcome);
     }
 
+    await syncReflectionHealthMetrics(this.pool);
     return summary;
   }
 }

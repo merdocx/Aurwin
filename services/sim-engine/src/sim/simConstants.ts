@@ -43,6 +43,8 @@ export interface SimConstants {
     event_global_limit_per_hour: number;
     event_global_limit_per_day: number;
     background_interval_hours: number;
+    quiet_background_interval_hours: number;
+    models: { background: string; event: string };
   };
   memory: {
     episodic_limit: { penguin: number; orca: number };
@@ -61,6 +63,7 @@ export interface SimConstants {
     intention_effects: {
       zone_preference: number;
       hunt_with_bonus: number;
+      seek_mate_bonus: number;
     };
   };
   world: {

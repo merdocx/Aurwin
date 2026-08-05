@@ -65,7 +65,8 @@ const EPISODE_TYPE_LABELS: Record<string, string> = {
 };
 
 export async function findDueBackgroundCandidates(pool: Pool): Promise<string[]> {
-  const hours = getConstants().reflection.background_interval_hours;
+  const activeHours = getConstants().reflection.background_interval_hours;
+  const quietHours = getConstants().reflection.quiet_background_interval_hours;
   const result = await pool.query<{ id: string }>(
     `
     SELECT c.id FROM creatures c
@@ -73,10 +74,38 @@ export async function findDueBackgroundCandidates(pool: Pool): Promise<string[]>
       AND NOT EXISTS (
         SELECT 1 FROM reflections r
         WHERE r.creature_id = c.id AND r.kind = 'background'
-          AND r.created_at > now() - ($1::text || ' hours')::interval
+          AND r.created_at > now() - (
+            CASE
+              WHEN EXISTS (
+                SELECT 1 FROM episodes e
+                WHERE e.creature_id = c.id
+                  AND e.consumed_by_reflection = FALSE
+                  AND e.type = ANY($1::text[])
+              )
+              THEN ($2::text || ' hours')::interval
+              ELSE ($3::text || ' hours')::interval
+            END
+          )
       )
+    ORDER BY
+      EXISTS (
+        SELECT 1 FROM episodes e
+        WHERE e.creature_id = c.id
+          AND e.consumed_by_reflection = FALSE
+          AND e.type = ANY($1::text[])
+      ) DESC,
+      EXISTS (
+        SELECT 1 FROM creatures child
+        WHERE child.parent_a = c.id OR child.parent_b = c.id
+      ) DESC,
+      EXISTS (
+        SELECT 1 FROM bonds b
+        WHERE (b.creature_a = c.id OR b.creature_b = c.id) AND b.kind = 'mate'
+      ) DESC,
+      c.last_reflection_at ASC NULLS FIRST,
+      c.born_at_tick ASC
     `,
-    [hours],
+    [EVENT_TRIGGER_TYPES as unknown as string[], activeHours, quietHours],
   );
   return result.rows.map((r) => r.id);
 }
@@ -89,9 +118,43 @@ export async function findDueBackgroundCandidates(pool: Pool): Promise<string[]>
  */
 export async function findDueEventCandidates(pool: Pool): Promise<string[]> {
   const hours = getConstants().reflection.event_debounce_hours;
-  const result = await pool.query<{ creature_id: string; species: "penguin" | "orca"; born_at_tick: string | number }>(
+  const result = await pool.query<{
+    creature_id: string;
+    species: "penguin" | "orca";
+    born_at_tick: string | number;
+    top_priority: string;
+    has_offspring: boolean;
+    has_mate: boolean;
+  }>(
     `
-    SELECT e.creature_id, c.species, c.born_at_tick, min(e.created_at) AS oldest
+    SELECT e.creature_id,
+           c.species,
+           c.born_at_tick,
+           min(e.created_at) AS oldest,
+           (
+             array_agg(
+               e.type ORDER BY
+                 CASE e.type
+                   WHEN 'friend_died' THEN 100
+                   WHEN 'birth' THEN 90
+                   WHEN 'bond_formed' THEN 80
+                   WHEN 'matured' THEN 70
+                   WHEN 'grew_old' THEN 60
+                   WHEN 'hunt_success' THEN 40
+                   WHEN 'bond_broken' THEN 20
+                   ELSE 0
+                 END DESC,
+                 e.created_at ASC
+             )
+           )[1] AS top_priority,
+           EXISTS (
+             SELECT 1 FROM creatures child
+             WHERE child.parent_a = e.creature_id OR child.parent_b = e.creature_id
+           ) AS has_offspring,
+           EXISTS (
+             SELECT 1 FROM bonds b
+             WHERE (b.creature_a = e.creature_id OR b.creature_b = e.creature_id) AND b.kind = 'mate'
+           ) AS has_mate
     FROM episodes e
     JOIN creatures c ON c.id = e.creature_id
     WHERE c.died_at_tick IS NULL
@@ -103,7 +166,131 @@ export async function findDueEventCandidates(pool: Pool): Promise<string[]> {
           AND r.created_at > now() - ($2::text || ' hours')::interval
       )
     GROUP BY e.creature_id, c.species, c.born_at_tick
-    ORDER BY oldest ASC
+    ORDER BY
+      CASE
+        WHEN (
+          array_agg(
+            e.type ORDER BY
+              CASE e.type
+                WHEN 'friend_died' THEN 100
+                WHEN 'birth' THEN 90
+                WHEN 'bond_formed' THEN 80
+                WHEN 'matured' THEN 70
+                WHEN 'grew_old' THEN 60
+                WHEN 'hunt_success' THEN 40
+                WHEN 'bond_broken' THEN 20
+                ELSE 0
+              END DESC,
+              e.created_at ASC
+          )
+        )[1] = 'friend_died' THEN 100
+        WHEN (
+          array_agg(
+            e.type ORDER BY
+              CASE e.type
+                WHEN 'friend_died' THEN 100
+                WHEN 'birth' THEN 90
+                WHEN 'bond_formed' THEN 80
+                WHEN 'matured' THEN 70
+                WHEN 'grew_old' THEN 60
+                WHEN 'hunt_success' THEN 40
+                WHEN 'bond_broken' THEN 20
+                ELSE 0
+              END DESC,
+              e.created_at ASC
+          )
+        )[1] = 'birth' THEN 90
+        WHEN (
+          array_agg(
+            e.type ORDER BY
+              CASE e.type
+                WHEN 'friend_died' THEN 100
+                WHEN 'birth' THEN 90
+                WHEN 'bond_formed' THEN 80
+                WHEN 'matured' THEN 70
+                WHEN 'grew_old' THEN 60
+                WHEN 'hunt_success' THEN 40
+                WHEN 'bond_broken' THEN 20
+                ELSE 0
+              END DESC,
+              e.created_at ASC
+          )
+        )[1] = 'bond_formed' THEN 80
+        WHEN (
+          array_agg(
+            e.type ORDER BY
+              CASE e.type
+                WHEN 'friend_died' THEN 100
+                WHEN 'birth' THEN 90
+                WHEN 'bond_formed' THEN 80
+                WHEN 'matured' THEN 70
+                WHEN 'grew_old' THEN 60
+                WHEN 'hunt_success' THEN 40
+                WHEN 'bond_broken' THEN 20
+                ELSE 0
+              END DESC,
+              e.created_at ASC
+          )
+        )[1] = 'matured' THEN 70
+        WHEN (
+          array_agg(
+            e.type ORDER BY
+              CASE e.type
+                WHEN 'friend_died' THEN 100
+                WHEN 'birth' THEN 90
+                WHEN 'bond_formed' THEN 80
+                WHEN 'matured' THEN 70
+                WHEN 'grew_old' THEN 60
+                WHEN 'hunt_success' THEN 40
+                WHEN 'bond_broken' THEN 20
+                ELSE 0
+              END DESC,
+              e.created_at ASC
+          )
+        )[1] = 'grew_old' THEN 60
+        WHEN (
+          array_agg(
+            e.type ORDER BY
+              CASE e.type
+                WHEN 'friend_died' THEN 100
+                WHEN 'birth' THEN 90
+                WHEN 'bond_formed' THEN 80
+                WHEN 'matured' THEN 70
+                WHEN 'grew_old' THEN 60
+                WHEN 'hunt_success' THEN 40
+                WHEN 'bond_broken' THEN 20
+                ELSE 0
+              END DESC,
+              e.created_at ASC
+          )
+        )[1] = 'hunt_success' THEN 40
+        WHEN (
+          array_agg(
+            e.type ORDER BY
+              CASE e.type
+                WHEN 'friend_died' THEN 100
+                WHEN 'birth' THEN 90
+                WHEN 'bond_formed' THEN 80
+                WHEN 'matured' THEN 70
+                WHEN 'grew_old' THEN 60
+                WHEN 'hunt_success' THEN 40
+                WHEN 'bond_broken' THEN 20
+                ELSE 0
+              END DESC,
+              e.created_at ASC
+          )
+        )[1] = 'bond_broken' THEN 20
+        ELSE 0
+      END DESC,
+      EXISTS (
+        SELECT 1 FROM creatures child
+        WHERE child.parent_a = e.creature_id OR child.parent_b = e.creature_id
+      ) DESC,
+      EXISTS (
+        SELECT 1 FROM bonds b
+        WHERE (b.creature_a = e.creature_id OR b.creature_b = e.creature_id) AND b.kind = 'mate'
+      ) DESC,
+      oldest ASC
     `,
     [EVENT_TRIGGER_TYPES as unknown as string[], hours],
   );
@@ -116,6 +303,40 @@ export async function findDueEventCandidates(pool: Pool): Promise<string[]> {
       return ageStageFor(r.species, weeks) !== "juvenile";
     })
     .map((r) => r.creature_id);
+}
+
+export async function fetchReflectionStatusCounts(pool: Pool): Promise<Map<string, number>> {
+  const result = await pool.query<{ status: string; count: string }>(
+    `SELECT status, count(*)::int AS count
+     FROM reflections
+     GROUP BY status`,
+  );
+  return new Map(result.rows.map((r) => [r.status, Number(r.count)]));
+}
+
+export interface ReflectionStalenessBySpecies {
+  species: "penguin" | "orca";
+  avgHours: number;
+  maxHours: number;
+}
+
+export async function fetchReflectionStalenessBySpecies(pool: Pool): Promise<ReflectionStalenessBySpecies[]> {
+  const tick = await fetchWorldTick(pool);
+  const visualTickSeconds = getConstants().time.visual_tick_seconds;
+  const result = await pool.query<{ species: "penguin" | "orca"; avg_ticks: string; max_ticks: string }>(
+    `SELECT species,
+            avg(GREATEST(0, $1 - COALESCE(last_reflection_at, 0))) AS avg_ticks,
+            max(GREATEST(0, $1 - COALESCE(last_reflection_at, 0))) AS max_ticks
+     FROM creatures
+     WHERE died_at_tick IS NULL
+     GROUP BY species`,
+    [tick],
+  );
+  return result.rows.map((r) => ({
+    species: r.species,
+    avgHours: (Number(r.avg_ticks) * visualTickSeconds) / 3600,
+    maxHours: (Number(r.max_ticks) * visualTickSeconds) / 3600,
+  }));
 }
 
 /** Считает событийные рефлексии за скользящее окно — для глобальных лимитов (7.3). */
